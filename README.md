@@ -30,7 +30,7 @@ npx skills update
 
 ## What ships
 
-### 25 skills
+### 26 skills
 
 | Skill | When it activates |
 |---|---|
@@ -38,6 +38,7 @@ npx skills update
 | `spree-customization` | Decision tree for "where does my customization belong" — routes to the right specific skill. Use FIRST when the pattern isn't obvious. |
 | `spree-resource` | Adding a new model + API endpoint via the `spree:api_resource` generator. |
 | `spree-decorators` | Extending existing Spree models/controllers via decorators (`Module#prepend`). |
+| `spree-dependencies` | Swapping core Spree services via `Spree.dependencies` — cart, checkout, ability, serializers. Includes the introspection rake tasks. |
 | `spree-api-v3` | Spree REST API v3 conventions — Store vs Admin surfaces, auth (pk_/sk_/JWT), scopes, prefixed IDs, envelope, Ransack filters. |
 | `spree-legacy-api-v2` | Maintaining or migrating away from the legacy API v2 (JSON:API style). |
 | `spree-typescript-sdk` | `@spree/sdk` + `@spree/admin-sdk` — auth modes, types, Zod, webhooks, retry config, MSW, extension patterns. |

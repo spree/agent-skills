@@ -61,16 +61,16 @@ Spree::Cart::Recalculate
 The chain is composed of services swappable via `Spree.dependencies`:
 
 ```ruby
-# backend/config/initializers/spree.rb
-Spree.dependencies do |deps|
-  deps.cart_add_item_service       = 'MyApp::Cart::AddItem'
-  deps.cart_recalculate_service    = 'MyApp::Cart::Recalculate'
-  deps.cart_remove_item_service    = 'MyApp::Cart::RemoveItem'
-  deps.cart_update_service         = 'MyApp::Cart::Update'
-end
+# config/initializers/spree.rb
+Spree.cart_add_item_service       = MyApp::Cart::AddItem
+Spree.cart_recalculate_service    = MyApp::Cart::Recalculate
+Spree.cart_remove_item_service    = MyApp::Cart::RemoveItem
+Spree.cart_update_service         = MyApp::Cart::Update
 ```
 
 To inject behavior into the cart pipeline, **subclass the service**, override `call`, and register. Don't decorate `Spree::Order` to add a callback — that fires on every save and confuses the state machine.
+
+For the full `Spree.dependencies` system (catalog of swappable services, introspection rake tasks, per-API-surface overrides), see the `spree-dependencies` skill.
 
 ```ruby
 module MyApp

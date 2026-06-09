@@ -131,52 +131,18 @@ end
 
 For the full tutorial — decorators, controller extensions, model decorators, route additions, testing — see `docs/developer/contributing/creating-an-extension.mdx`.
 
-## Swapping a core service via `Spree.dependencies`
+## Swapping a core service is NOT an extension
 
-Often the right answer is "I want my own version of an existing Spree service" — replace how the cart adds items, how the order recalculates, how tax computes, etc. That's dependency injection, NOT an extension. The mechanism lives in `Spree.dependencies`:
+A common confusion: "I want my own version of an existing Spree service — should I build an extension?" Almost always no. Spree exposes 64 swappable core services + 233 API injection points via `Spree.dependencies`. You subclass the default, register the override in `config/initializers/spree.rb`, and Spree calls your service everywhere. No gem packaging required.
 
 ```ruby
 # config/initializers/spree.rb
-Spree.dependencies do |deps|
-  deps.cart_add_item_service    = 'MyApp::Cart::AddItem'
-  deps.cart_recalculate_service = 'MyApp::Cart::Recalculate'
-  deps.cart_remove_item_service = 'MyApp::Cart::RemoveItem'
-end
+Spree.cart_add_item_service = MyApp::Cart::AddItem
 ```
 
-Or assign single values directly:
+See the **`spree-dependencies`** skill for the full pattern, the catalog of injection points, and the introspection rake tasks (`spree:dependencies:list`, `spree:dependencies:overrides`, `spree:dependencies:validate`).
 
-```ruby
-Spree.cart_add_item_service = 'MyApp::Cart::AddItem'
-```
-
-Your replacement class subclasses the Spree default and overrides the steps you want to change:
-
-```ruby
-# app/services/my_app/cart/add_item.rb
-module MyApp
-  module Cart
-    class AddItem < Spree::Cart::AddItem
-      def call(order:, variant:, quantity: nil, metadata: {}, options: {})
-        ApplicationRecord.transaction do
-          run :add_to_line_item
-          run :handle_stock_reservations   # keep parent's stock step
-          run :my_custom_step              # your custom logic
-          run Spree.cart_recalculate_service
-        end
-      end
-
-      def my_custom_step(order:, variant:, **)
-        # ...
-      end
-    end
-  end
-end
-```
-
-Swappable services include: cart add/remove/update/recalculate, order updater, checkout state machine, tax calculator, payment processor, search provider, line item finder, ability classes, every API v3 serializer. The full list lives in `spree_core/lib/spree/core.rb` (search for `def self.<x>_service` and `cattr_accessor`).
-
-When to use dependency injection vs a decorator: **if Spree gives you a swappable service, use it.** Decorators on `Spree::Cart::AddItem` would couple to the parent's internal step names and break on upgrades; subclassing + injection is the supported extension point.
+Extensions become the right shape when you want to **share** customization (including dependency overrides) across multiple Spree apps — the extension's engine declaration registers the overrides at boot, so any host app that bundles the gem gets the swap automatically.
 
 ## When an extension is and isn't the right shape
 

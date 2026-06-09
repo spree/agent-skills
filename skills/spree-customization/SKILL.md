@@ -17,7 +17,7 @@ This skill is a decision tree. It maps a customization need to the right specifi
 | Tweak Spree's runtime behavior globally | `Spree::Config[:key]` in `config/initializers/spree.rb` | (configuration is straightforward — see docs link below) |
 | React to something happening in Spree (order completed, product updated, customer registered, stock changed) | Events subscriber | **`spree-events-webhooks`** |
 | Notify an external service (ERP, CRM, fulfillment, analytics, Slack) when something happens | Events subscriber OR outbound webhook | **`spree-events-webhooks`** |
-| Replace how a core service computes (cart add, tax calculation, search, checkout flow, ability checks) | Dependency injection via `Spree.dependencies` | **`spree-extensions`** |
+| Replace how a core service computes (cart add, tax calculation, search, checkout flow, ability checks) | Dependency injection via `Spree.dependencies` | **`spree-dependencies`** |
 | Add a menu item / nav entry to the admin | `Spree.admin.navigation.sidebar.add` | **`spree-admin`** (Rails admin) or **`spree-dashboard`** (React) |
 | Add a section / form field to an existing admin page | `Spree.admin.partials.<page> << '...'` | **`spree-admin`** or **`spree-dashboard`** |
 | Customize an admin table (columns, sort) | `Spree.admin.tables.<key>.add ...` | **`spree-admin`** or **`spree-dashboard`** |
@@ -100,12 +100,10 @@ That's a service swap. Subclass `Spree::Cart::Recalculate` and register your rep
 
 ```ruby
 # config/initializers/spree.rb
-Spree.dependencies do |deps|
-  deps.cart_recalculate_service = 'MyApp::Cart::Recalculate'
-end
+Spree.cart_recalculate_service = MyApp::Cart::Recalculate
 ```
 
-→ See the **`spree-extensions`** skill for the dependency injection pattern.
+→ See the **`spree-dependencies`** skill for the full dependency injection pattern, the catalog of 64 core + 233 API injection points, and the `spree:dependencies:list / :overrides / :validate` rake tasks.
 
 ### "I need to add a 'Loyalty Points' page to the admin sidebar"
 

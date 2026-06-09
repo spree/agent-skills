@@ -42,7 +42,7 @@ Quick summary of the priority order:
 
 1. **Settings / `Spree::Config`** — for runtime behavior toggles.
 2. **Events + subscribers** — for side effects ("sync to ERP when order completes").
-3. **Dependency injection** (`Spree.dependencies`) — for swapping how a core service computes.
+3. **Dependency injection** (`Spree.dependencies`) — for swapping how a core service computes. See `spree-dependencies` skill.
 4. **Admin extension APIs** (`Spree.admin.navigation`, `Spree.admin.partials`, `Spree.admin.tables`, `Spree.ransack`) — for admin UI and search.
 5. **Generators** (`spree:api_resource`, `spree:model`) — for brand-new models / resources.
 6. **Decorators** (`spree:model_decorator`, `spree:controller_decorator`) — for structural changes to existing Spree classes.
