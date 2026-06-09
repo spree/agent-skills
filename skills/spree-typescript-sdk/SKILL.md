@@ -42,37 +42,40 @@ const client = createClient({
 })
 
 // All resources hang flat off the client
-const { data: products, meta } = await client.products.list({ per_page: 20 })
+const { data: products, meta } = await client.products.list({ limit: 20 })
 const product = await client.products.get('prod_86Rf07xd4z')
 const cart = await client.carts.create()
-await client.carts.lineItems.create({ cart_id: cart.id, variant_id: 'variant_…', quantity: 1 })
+await client.carts.items.create(cart.id, { variant_id: 'variant_…', quantity: 1 }, {
+  spreeToken: cart.token,
+})
 ```
 
 ### Resource shape
 
-Every resource has the same five methods (subject to per-resource availability):
+Every resource exposes the same five methods (subject to per-resource availability):
 
 ```ts
-client.<resource>.list(params?)       // GET   index
-client.<resource>.get(id, params?)    // GET   show
-client.<resource>.create(body)        // POST  create
-client.<resource>.update(id, body)    // PUT   update
-client.<resource>.destroy(id)         // DELETE
+client.<resource>.list(params?, options?)              // GET   index
+client.<resource>.get(idOrSlug, params?, options?)     // GET   show
+client.<resource>.create(body, options?)               // POST  create
+client.<resource>.update(id, body, options?)           // PUT   update
+client.<resource>.delete(id, options?)                 // DELETE
 ```
 
-Method name is always `get`, never `show`. Holds for singletons too (`client.me.get()`, `client.store.get()` if defined).
+Method name is always `get`, never `show`. The delete method is `delete`, not `destroy`. Nested resources (e.g. `client.carts.items.create(cartId, params, options)`) take the parent prefixed ID as the first positional argument.
 
 ### Customer auth (JWT)
 
-After login, attach the JWT alongside the publishable key:
+After login, attach the JWT per request via `options.token`. There is no `setAccessToken` — the SDK doesn't hold customer tokens in client state.
 
 ```ts
-const { access_token } = await client.auth.login({ email, password })
-client.setAccessToken(access_token)
+const { token, refresh_token, user } = await client.auth.login({ email, password })
 
-// Subsequent calls include Authorization: Bearer <jwt>
-const orders = await client.orders.list()      // customer's own orders
+// Subsequent calls pass the token via options
+const orders = await client.customer.orders.list({}, { token })
 ```
+
+The login response's `token` field is the customer JWT. Store and pass per-request — server-rendered apps can stash it in a session cookie; client-side apps store it in memory and refresh via `client.auth.refresh({ refresh_token })`.
 
 ### Setting defaults dynamically
 
@@ -90,14 +93,14 @@ Each setter mutates the in-memory defaults. The next request uses the new values
 ```ts
 await client.products.list({
   page: 2,
-  per_page: 50,
+  limit: 50,
   filter: { name_cont: 'shirt', price_gteq: 20, price_lteq: 100 },
   sort: '-created_at',
-  include: 'images,default_variant',
+  expand: ['images', 'default_variant'],
 })
 ```
 
-Internally these become `q[name_cont]=shirt&q[price_gteq]=20` etc via `transformListParams` in `@spree/sdk-core`. You don't need to write Ransack predicates by hand for filter keys — the SDK handles the transform.
+Internally `filter` keys become `q[name_cont]=shirt&q[price_gteq]=20` via `transformListParams` in `@spree/sdk-core` — you don't need to write Ransack predicates by hand. The `expand` array becomes `?expand=images,default_variant` for the API.
 
 ### Error handling
 
@@ -105,7 +108,7 @@ Internally these become `q[name_cont]=shirt&q[price_gteq]=20` etc via `transform
 import { SpreeError } from '@spree/sdk'
 
 try {
-  await client.carts.lineItems.create({ cart_id, variant_id, quantity: 1 })
+  await client.carts.items.create(cartId, { variant_id, quantity: 1 }, { spreeToken })
 } catch (err) {
   if (err instanceof SpreeError) {
     err.status       // 422
@@ -212,10 +215,8 @@ if (event.name === 'order.completed') {
 ### Install
 
 ```bash
-npm install @spree/admin-sdk@next
+npm install @spree/admin-sdk
 ```
-
-(The `@next` tag is the 6.0 Developer Preview; check before each release.)
 
 ### Two auth modes
 
@@ -226,36 +227,37 @@ import { createAdminClient } from '@spree/admin-sdk'
 
 const admin = createAdminClient({
   baseUrl: 'https://my-spree.example.com',
-  apiKey: process.env.SPREE_ADMIN_SECRET_KEY!,   // sk_…
+  secretKey: process.env.SPREE_ADMIN_SECRET_KEY!,   // sk_…
+  storeId: 'store_k5nR8xLq',                         // optional multi-store routing
 })
 
 const { data: orders } = await admin.orders.list({ filter: { state_eq: 'complete' } })
 ```
 
-The secret key carries its own scopes (`read_orders`, `write_products`, etc.) — see `spree-api-v3` for the scope list. Requests for endpoints outside the key's scopes get 403.
+The secret key carries scopes (`read_orders`, `write_products`, etc.) — see `spree-api-v3` for the scope list. Requests for endpoints outside the key's scopes get 403.
 
 **Mode 2: JWT (admin SPA, human users)**
 
 ```ts
 const admin = createAdminClient({
   baseUrl,
-  publishableKey: 'pk_…',     // identifies the store
-  accessToken: jwtFromLogin,  // identifies the user
+  jwtToken: jwtFromLogin,    // identifies the admin user; mutually exclusive with secretKey
+  storeId: currentStoreId,
 })
 ```
 
-JWT mode uses CanCanCan abilities on the backend. What the user can do depends on their role.
+JWT mode uses CanCanCan abilities on the backend. What the user can do depends on their role. The Admin SDK defaults to `credentials: 'include'` so the admin refresh-token cookie is sent on `/api/v3/admin/auth/*` endpoints.
 
 ### Resource shape
 
-Same five-method shape as the Store SDK, but full CRUD is enabled by default for every resource:
+Same five-method shape as the Store SDK, full CRUD enabled by default for every resource:
 
 ```ts
 admin.products.list()
 admin.products.get('prod_…')
 admin.products.create({ name, description, ... })
 admin.products.update('prod_…', { name: 'Renamed' })
-admin.products.destroy('prod_…')
+admin.products.delete('prod_…')
 ```
 
 ### Singletons use `get`, not `show`
@@ -595,7 +597,7 @@ See the `spree-dashboard` skill for the full resource-hook pattern.
 
 ### "Where's the OpenAPI?"
 
-`backend/node_modules/@spree/docs/dist/api-reference/store.yaml` (Store) — generated from the Rails integration specs via Rswag. Authoritative reference for everything the SDK exposes.
+`node_modules/@spree/docs/dist/api-reference/store.yaml` (Store) — generated from the Rails integration specs via Rswag. Authoritative reference for everything the SDK exposes.
 
 ## Where to read further
 

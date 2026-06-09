@@ -51,7 +51,7 @@ curl -H "X-Spree-API-Key: sk_…" \
      https://my-spree.example.com/api/v3/admin/orders
 ```
 
-Secret keys (`sk_*` prefix) carry **Shopify-style scopes** that gate which endpoints they can hit. Scopes are granted at key creation. Each request's scope is enforced by `ScopedAuthorization`; missing scope = 403.
+Secret keys (`sk_*` prefix) carry **scopes** that gate which endpoints they can hit. Scopes are granted at key creation. Each request's scope is enforced by `ScopedAuthorization`; missing scope = 403.
 
 The scope list (5.5):
 ```
@@ -127,10 +127,9 @@ Every list endpoint returns:
     "pages": 7,
     "from": 1,
     "to": 25,
+    "in": 25,
     "previous": null,
-    "next": 2,
-    "current_cursor": "...",
-    "next_cursor": "..."
+    "next": 2
   }
 }
 ```
@@ -144,8 +143,7 @@ Single-record endpoints return the record's attributes directly (no wrapping):
 Conventions:
 - **`type`** is the resource type identifier (`"product"`, `"order"`, `"cart"`). Used by clients to dispatch.
 - **`meta` is on lists only.** Single-record responses don't have it.
-- **`next` / `previous`** are page numbers (or `null` at the ends). Use these for offset pagination.
-- **`current_cursor` / `next_cursor`** are for keyset pagination — use these on large collections (orders, customers) to avoid OFFSET performance.
+- **`next` / `previous`** are page numbers (or `null` at the ends). Pagination is offset-based via Pagy — pass `?page=N&limit=N` to navigate.
 
 ## Prefixed IDs
 
@@ -156,15 +154,13 @@ prod_86Rf07xd4z       Product
 variant_k5nR8xLq      Variant
 or_m3Rp9wXz           Order
 py_…                  Payment       (Stripe parity)
-ful_…                 Shipment      (becomes Fulfillment in 6.0)
-brand_…               Brand
-ad_…                  Adjustment
+ful_…                 Shipment
+adj_…                 Adjustment
 li_…                  LineItem
-ctg_…                 Category      (renamed from Taxon)
 ch_…                  Channel
 pk_…                  ApiKey (publishable)
 sk_…                  ApiKey (secret)
-cf_…                  CustomField   (renamed from Metafield)
+cf_…                  CustomField   (alias of Metafield)
 ```
 
 The integer PK is **never** in API responses — only the prefixed form. Same on writes: send `"variant_id": "variant_k5nR8xLq"`, not `"variant_id": 42`. The server resolves prefixed IDs to integer PKs internally.
@@ -173,27 +169,27 @@ Computation: `Sqids.encode([integer_pk])` with `min_length: 10`. Deterministic �
 
 ## Expand
 
-Most resources support an `include` query param (Spree uses `include`, not `expand`) for sideloading related data:
+Resources support an `expand` query param for sideloading related data:
 
 ```bash
-curl '/api/v3/store/products/cool-shirt?include=images,default_variant,categories'
+curl '/api/v3/store/products/cool-shirt?expand=images,default_variant,categories'
 ```
 
-Returns the product with `images`, `default_variant`, and `categories` data inlined as full objects rather than just IDs. Without `include`, related objects appear as ID references in `relationships`.
+Returns the product with `images`, `default_variant`, and `categories` inlined as full objects. Without `expand`, related objects appear as ID references on the parent. Dot notation lets you expand nested associations:
 
-Allowed includes are per-resource and listed in the OpenAPI spec.
+```bash
+curl '/api/v3/store/products/cool-shirt?expand=variants.media'
+```
+
+Allowed expand keys are per-resource and listed in the OpenAPI spec.
 
 ## Pagination
 
 ```bash
-# Offset (small/medium collections)
 GET /api/v3/admin/orders?page=2&limit=50
-
-# Keyset / cursor (large collections — orders, customers, line_items)
-GET /api/v3/admin/orders?cursor=eyJpZCI6Im9yX...
 ```
 
-`limit` defaults vary by endpoint (usually 25). Maximum is generally 100. Use the `meta.next_cursor` from the previous response for the next page on keyset paginated endpoints.
+Offset-based via Pagy. `limit` defaults to 25; max is generally 100. Use `meta.next` / `meta.previous` to navigate.
 
 ## Filtering with Ransack
 
@@ -244,23 +240,27 @@ All errors use a consistent envelope:
 }
 
 // 429 Too Many Requests (rate limited)
-{ "error": { "code": "rate_limited", "message": "..." } }
+{ "error": { "code": "rate_limit_exceeded", "message": "..." } }
 ```
 
 The `details` map on 422s uses **attribute names** as keys. Map field-level errors to inputs; `base` errors are non-field-specific (display as a form-level banner). The `@spree/sdk` includes a `SpreeError` class that parses these automatically.
 
 ## Rate limiting
 
-Default limits are conservative:
+The API has per-key and per-endpoint rate limits configured via `Spree::Api::Config`:
 
-- **Anonymous (publishable key only):** 300 req/min per IP
-- **Authenticated customer (JWT):** 600 req/min per user
-- **Secret key (admin app):** 1000 req/min per key
-- **JWT admin:** 1000 req/min per user
+| Setting | Default | Scope |
+|---|---|---|
+| `rate_limit_per_key` | 300 / 60s | General requests, per API key |
+| `rate_limit_window` | 60s | Window for the per-key counter |
+| `rate_limit_login` | 5 / 60s | `POST /api/v3/store/auth/login`, per IP |
+| `rate_limit_register` | 3 / 60s | Register endpoint, per IP |
+| `rate_limit_refresh` | 10 / 60s | Token refresh, per IP |
+| `rate_limit_password_reset` | 3 / 60s | Password reset, per IP |
 
 Hit limits → `429 Too Many Requests` with `Retry-After` header. The `@spree/sdk` retries with exponential backoff automatically.
 
-To raise limits in production, configure `Spree::Config[:api_rate_limit]` or use Rack::Attack at the infra layer.
+Tune via `Spree::Api::Config[:rate_limit_per_key]` etc. in `config/initializers/spree.rb`. For tougher global throttling (per-IP at the proxy edge), layer Rack::Attack or your CDN's WAF on top.
 
 ## Read/write attribute symmetry (a v3 invariant)
 
@@ -297,8 +297,8 @@ It doesn't — Webhooks 2.0 uses the same prefixed IDs as the API. If you're see
 
 ## Where to read further
 
-- **OpenAPI spec:** `backend/node_modules/@spree/docs/dist/api-reference/store.yaml` — every endpoint, parameter, response schema. Authoritative.
+- **OpenAPI spec:** `node_modules/@spree/docs/dist/api-reference/store.yaml` — every endpoint, parameter, response schema. Authoritative.
 - **Adding a new endpoint:** see the `spree-resource` skill — `spree:api_resource` generator produces v3-conformant controllers + serializers automatically.
 - **SDK:** `@spree/sdk` (Store) and `@spree/admin-sdk` (Admin) — typed clients. See the `spree-typescript-sdk` skill.
-- **Auth deep dive:** `docs/plans/6.0-platform-auth.md` and `docs/plans/5.5-admin-api-key-scopes.md` if the monorepo is present.
+- **Customization:** `node_modules/@spree/docs/dist/developer/customization/api.mdx` and `authentication.mdx`
 - **Webhooks vs subscribers:** see the `spree-events-webhooks` skill.

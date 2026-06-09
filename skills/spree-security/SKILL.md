@@ -125,7 +125,7 @@ Rails auto-escapes ERB output. Where you raw-render user content (rich text desc
 ActionController::Base.helpers.sanitize(product.description, tags: %w[p br strong em a ul li], attributes: %w[href])
 ```
 
-The 6.0 rich-text plan stores HTML in text columns and sanitizes on write — see `docs/plans/6.0-rich-text-descriptions.md`. On 5.x: sanitize before storing OR before rendering, but pick one and be consistent.
+Sanitize before storing OR before rendering, but pick one and be consistent.
 
 ### CORS
 
@@ -190,24 +190,16 @@ end
 
 Defaults are restrictive — start from "can :read, :all" only if you're sure. Better: build up explicit grants per role.
 
-### Encrypted preferences
+### Payment method preferences
 
-Spree preferences that contain secrets (gateway credentials, API keys for integrations) use `Spree::EncryptedConfiguration`:
+Payment methods (Stripe, Adyen, PayPal, etc.) store their gateway credentials as Spree preferences on the `Spree::PaymentMethod` record. These end up in `spree_payment_methods.preferences` as a serialized column.
 
-```ruby
-class Spree::Gateway::Stripe < Spree::Gateway
-  preference :secret_key, :string
-  preference :publishable_key, :string
-end
-```
+Two precautions:
 
-In production, **set `Rails.application.credentials.secret_key_base`** and enable preference encryption:
+- **Set `Rails.application.credentials.secret_key_base`** consistently across all environments. Without it, the preference serializer's encryption is weakened or unstable.
+- **Use the admin UI to enter live keys** (Settings → Payments → edit method), not seed scripts or direct DB writes. Treat preference rows as containing live secrets; back up encrypted.
 
-```ruby
-Spree::Config[:preference_encryptor_key] = Rails.application.credentials.spree[:preference_encryptor_key]
-```
-
-Without this, preferences are stored in plaintext in `spree_payment_methods.preferences`. With it, AES-256-GCM encrypted at rest. **Always set in production.**
+If a gateway secret leaks (committed to git, exposed in a log, copied to a chat), rotate at the provider first (Stripe dashboard, Adyen back office), then update the admin preference, then audit recent transactions.
 
 ### Webhook signature verification (HMAC)
 
@@ -222,9 +214,9 @@ In development this is disabled so localhost webhooks work. **Never run developm
 ### PCI DSS scope
 
 Spree never stores raw PANs. Payment data flows through tokenization at the gateway:
-- **Stripe / Stripe Elements / Stripe Payment Sheet** — card data goes browser→Stripe directly. Spree only sees a `pm_…` token.
-- **Adyen / Adyen Drop-in** — same pattern; Spree sees a `tokenizedCard` reference.
-- **Spree::CreditCard** stores last4, brand, exp month/year — never the full PAN, never the CVC.
+- **Stripe** (via `spree_stripe`) — card data goes browser→Stripe directly via Stripe Elements / Checkout. Spree only sees a payment-method token.
+- **Adyen** (via `spree_adyen`) — same pattern; the drop-in component returns a tokenized reference.
+- **`Spree::CreditCard`** stores last4, brand, exp month/year — never the full PAN, never the CVC.
 
 PCI scope reduction relies on this. **Don't add fields to `spree_credit_cards` that hold raw card data.** If you find yourself wanting to, it's a sign you're building the wrong integration pattern — gateway tokenization is the right answer.
 
@@ -254,19 +246,25 @@ Prefixed IDs don't help here — they're discoverable (sequential PKs under the 
 
 ### Rate limiting
 
-Default limits are conservative:
-- Anonymous (pk_ only): 300 req/min/IP
-- JWT customer: 600 req/min/user
-- Secret key: 1000 req/min/key
+Spree itself doesn't ship application-level rate limiting — that's the deployer's responsibility. Layer it at two places:
 
-For production: layer **Rack::Attack** at the app level (sliding window, per-IP, per-key) and reverse-proxy throttling at the CDN/LB (Cloudflare, Fastly, ELB). Spree's built-in limiter is a backstop, not the only line.
+- **Rack::Attack** in the Rails app (per-IP, per-API-key, sliding windows). Throttle login and checkout endpoints aggressively.
+- **CDN / load balancer** (Cloudflare, Fastly, AWS WAF) for the global ceiling.
 
 ```ruby
 # config/initializers/rack_attack.rb
-Rack::Attack.throttle('login attempts', limit: 5, period: 60) do |req|
-  req.ip if req.path == '/api/v3/storefront/auth/login' && req.post?
+class Rack::Attack
+  throttle('login attempts', limit: 5, period: 60) do |req|
+    req.ip if req.path == '/api/v3/store/auth/login' && req.post?
+  end
+
+  throttle('api by key', limit: 600, period: 60) do |req|
+    req.env['HTTP_X_SPREE_API_KEY']
+  end
 end
 ```
+
+Tune the numbers to your traffic shape. Without rate limiting, a leaked publishable key can be used to scrape your full catalog at carrier speed.
 
 ### Dependency hygiene
 
@@ -305,7 +303,7 @@ Without this, a `POST /admin/payments` with form data will write the secret_key 
 ## A short checklist for a new Spree deployment
 
 - [ ] Production credentials in encrypted credentials or environment, **not** in repo.
-- [ ] `preference_encryptor_key` set so gateway secrets encrypt at rest.
+- [ ] `secret_key_base` set via `Rails.application.credentials` so payment method preferences serialize consistently.
 - [ ] CORS allowlist matches your storefront origin(s) only.
 - [ ] CSP defined and not `default_src 'unsafe-inline'` everywhere.
 - [ ] Brakeman + bundle audit + pnpm audit in CI.

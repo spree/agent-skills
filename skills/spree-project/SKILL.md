@@ -20,7 +20,7 @@ All Spree-specific code (models, decorators, subscribers) lives under `backend/a
 When you need Spree-specific guidance — how a model works, what events are available, how the cart pipeline runs — read the local docs first:
 
 ```
-backend/node_modules/@spree/docs/dist/
+node_modules/@spree/docs/dist/
 ├── developer/
 │   ├── core-concepts/       Products, orders, payments, inventory
 │   ├── customization/       Decorators, extensions, dependencies, events
@@ -162,4 +162,4 @@ If you don't have `spree` on your PATH, prefix with the package runner: `npx spr
 
 - Need to add a new model + API endpoint? See the `spree-resource` skill.
 - Need to upgrade Spree? See the `spree-upgrade` skill.
-- Need details on a specific Spree concept? Read `backend/node_modules/@spree/docs/dist/developer/` first.
+- Need details on a specific Spree concept? Read `node_modules/@spree/docs/dist/developer/` first.

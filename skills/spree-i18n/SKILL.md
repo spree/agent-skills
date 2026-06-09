@@ -191,7 +191,7 @@ For RTL support:
    I18n.available_locales = %i[en ar he]
    ```
 2. **Storefront direction:** the storefront detects locale direction via `I18n.t('i18n.dir', default: 'ltr')`. Spree's locale files set this; if you customize, make sure your `ar.yml` sets `i18n.dir: rtl`.
-3. **Admin UI direction:** legacy Rails admin honors RTL via Bootstrap RTL classes. The 6.0 React dashboard sets `dir="rtl"` on the document root when an RTL locale is active.
+3. **Admin UI direction:** the legacy Rails admin honors RTL via Bootstrap RTL classes. The React dashboard sets `dir="rtl"` on the document root when an RTL locale is active.
 4. **Mobility data** works the same — you store Arabic strings in `spree_product_translations` with `locale: 'ar'`.
 
 ## Storefront integration
@@ -273,7 +273,7 @@ The 5.4 plan adds a centralized Translations admin (overview grid + bulk CSV imp
 ## Where to read further
 
 - **Mobility gem docs:** https://github.com/shioyama/mobility — backends, fallbacks, dirty tracking.
-- **Spree docs:** `backend/node_modules/@spree/docs/dist/developer/internationalization/`.
+- **Spree docs:** `node_modules/@spree/docs/dist/developer/internationalization/`.
 - **`spree_i18n` gem:** https://github.com/spree-contrib/spree_i18n — community translations.
 - **Plan files (monorepo):** `docs/plans/5.4-centralized-translations-admin.md`, `docs/plans/5.4-metafield-translations.md`.
 - **Admin SPA i18n:** see `spree-dashboard` skill — `packages/dashboard/src/locales/` + i18next setup.

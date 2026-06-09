@@ -133,13 +133,13 @@ The migration is **per-endpoint**. You don't need to flip everything at once; v2
 | v2 | v3 |
 |---|---|
 | OAuth2 password grant for customer login | JWT login at `/api/v3/storefront/auth/login` (returns `access_token` + `refresh_token`) |
-| OAuth2 client_credentials for admin apps | Secret key (`sk_*`) with Shopify-style scopes |
+| OAuth2 client_credentials for admin apps | Secret key (`sk_*`) with scoped permissions |
 | `Authorization: Bearer <token>` | `X-Spree-API-Key: <pk_…\|sk_…>` + optional `Authorization: Bearer <jwt>` |
 | `X-Spree-Order-Token` for guest carts | Still `X-Spree-Token` (renamed) |
 
 For admin apps: generate a secret key via the admin UI (Settings → API keys → Secret keys) with the required scopes. Drop OAuth2 entirely.
 
-For customer flows: replace the OAuth2 login call with JWT login. The new flow returns refresh tokens too (5.5+) — see `docs/plans/5.5-admin-auth-cookie-refresh.md` for the cookie-based pattern the admin SPA uses.
+For customer flows: replace the OAuth2 login call with JWT login. The new flow returns refresh tokens too — see the admin authentication docs for the cookie-based pattern the admin SPA uses.
 
 ### Step 2: ID migration
 
@@ -223,4 +223,4 @@ If you maintain a high-value v2 integration, schedule the migration; you'll only
 - **v3 TypeScript SDKs:** `spree-typescript-sdk` skill.
 - **Adding a custom endpoint on v3:** `spree-resource` skill.
 - **v2 source:** `spree/api/app/controllers/spree/api/v2/` — controllers + serializers (jsonapi-serializer based).
-- **v2 OpenAPI spec:** in older versions of `docs/api-reference/`. Most users should move to the v3 spec at `backend/node_modules/@spree/docs/dist/api-reference/store.yaml`.
+- **v2 OpenAPI spec:** in older versions of `docs/api-reference/`. Most users should move to the v3 spec at `node_modules/@spree/docs/dist/api-reference/store.yaml`.

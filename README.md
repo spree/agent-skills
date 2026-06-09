@@ -48,9 +48,9 @@ npx skills update
 | `spree-payments` | Payment methods, gateways, refunds, gift cards, store credits. |
 | `spree-promotions` | Promotion rules, actions, calculators, coupon codes. |
 | `spree-pricing` | Variant prices, multi-currency, price lists, EU Omnibus / PriceHistory. |
-| `spree-shipping-fulfillment` | Shipments, methods, rates, stock locations, the 6.0 Fulfillment rename, returns. |
-| `spree-admin` | Legacy Rails admin (`spree_admin` gem). Default on Spree 5.x. |
-| `spree-dashboard` | The 6.0 React admin SPA — extension via `defineDashboardPlugin`. |
+| `spree-shipping-fulfillment` | Shipments, methods, rates, stock locations, returns. |
+| `spree-admin` | Customizing the legacy Rails admin (`spree_admin` gem). |
+| `spree-dashboard` | Extending the React admin SPA (`@spree/dashboard`) via `defineDashboardPlugin`. |
 | `spree-storefront` | The Next.js storefront and `@spree/sdk`. |
 | `spree-i18n` | UI translations (`Spree.t` + YAML) and data translations (Mobility). |
 | `spree-testing` | RSpec + Factory Bot + Capybara, `spree_dev_tools`, the `API v3 Store` shared context. |

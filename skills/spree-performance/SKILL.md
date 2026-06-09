@@ -69,20 +69,25 @@ The classic Spree catalog page (PLP) hits N+1s by default. Spree includes `ar_la
 
 For the most common path (default-variant-only listing), the API's `ProductsController#scope` already does the right thing. If you're building a custom catalog endpoint, copy that pattern.
 
-### Spree.cache_key_with_version on Product
+### `cache_key_with_version`
 
-Spree generates cache keys that incorporate the updated_at of Product + its variants + its categories. Use it for HTTP caching and fragment caching:
+Every Spree model that's `Spree.base_class`-derived has a `cache_key_with_version` instance method (from ActiveRecord) — it folds in the model's `updated_at`. Use it for HTTP caching and fragment caching:
 
 ```ruby
 def show
   product = scope.find_by_prefix_id!(params[:id])
-  cache_key = Spree.cache_key_with_version(product, ['v3', 'show'])
-  fresh_when(etag: cache_key, last_modified: product.updated_at)
+  fresh_when(etag: product.cache_key_with_version, last_modified: product.updated_at)
   # render serializer
 end
 ```
 
-Touching the product (via `product.touch`) or any of its variants invalidates the cache automatically. Most Spree updates already touch the right records; custom code may need explicit touches.
+```erb
+<% cache [product.cache_key_with_version, 'pdp'] do %>
+  <%= render 'pdp', product: product %>
+<% end %>
+```
+
+`product.touch` (or touching any has_many child that the model `belongs_to :product, touch: true` on) bumps the version and invalidates the cache.
 
 ## Search provider performance
 
@@ -105,9 +110,9 @@ The right choice for medium-to-large catalogs.
 
 **Common Meilisearch performance issues:**
 
-- **Indexing flood.** Every product update fires a `Spree::SearchProvider::IndexJob`. On a bulk import, this swamps Sidekiq. Batch via `Spree::Search.reindex_in_batches(scope)`.
-- **Synonyms / typo tolerance config drift.** Meilisearch's tolerance settings live in the index — if you change them in code without reapplying, results don't match expectations. Reapply via `Spree::SearchProvider::Meilisearch::Setup.call`.
-- **Result set too large.** Meilisearch returns the full result set by default; bound it via the `limit` query param.
+- **Indexing flood.** Every product update enqueues a `Spree::SearchProvider::IndexJob` (it runs on `Spree.queues.search`). On a bulk import this swamps Sidekiq — pause the queue, do the import, then trigger a single `bin/rake spree:search:reindex` afterwards.
+- **Synonyms / typo tolerance config drift.** Meilisearch's tolerance settings live on the index — if you change configuration code without re-running setup, results won't match expectations. The Meilisearch provider's `reindex` re-applies index settings.
+- **Result set too large.** Bound result sizes via `limit` query param; default page sizes in the API are usually right.
 
 ## Image processing
 
@@ -115,31 +120,31 @@ Spree uses ActiveStorage. Image variants (thumbs, smalls, larges) are generated 
 
 ### Move processing off the web tier
 
-Add `image_processing` jobs to a dedicated queue and process out-of-band:
+Pre-generate variants in a background job instead of letting the first storefront request do the work. A subscriber on `variant.updated` (lifecycle event) does the trick:
 
 ```ruby
-# backend/config/initializers/spree.rb
-Spree.queues.images = :images
-
-# Pre-generate variants when a product is created/updated:
-Rails.application.config.after_initialize do
-  Spree.subscribers << ImageVariantPregenerationSubscriber
-end
-
+# backend/app/subscribers/image_variant_pregeneration_subscriber.rb
 class ImageVariantPregenerationSubscriber < Spree::Subscriber
   subscribes_to 'variant.updated', async: true
 
   def handle(event)
-    variant = Spree::Variant.find_by_prefix_id(event.payload['id'])
+    variant = Spree::Variant.find_by(id: event.payload['id'])
+    return unless variant
+
     variant.images.each do |image|
       image.variant(resize_to_limit: [300, 300]).processed
       image.variant(resize_to_limit: [600, 600]).processed
     end
   end
 end
+
+# backend/config/initializers/spree.rb
+Rails.application.config.after_initialize do
+  Spree.subscribers << ImageVariantPregenerationSubscriber
+end
 ```
 
-Configure Sidekiq to run `images` queue on a separate worker process (or with lower concurrency) so it doesn't starve other queues.
+Run image-heavy Sidekiq queues on a separate worker process with lower concurrency so they don't starve customer-facing queues.
 
 ### Use a CDN
 
@@ -147,19 +152,19 @@ ActiveStorage serves images via Rails by default. For production, route via Clou
 
 ## Sidekiq queue configuration
 
-Spree organizes background work into named queues. Default configuration routes everything to `default`, but you can split for production:
+Spree organizes background work into named queues exposed via `Spree.queues`. By default every queue is mapped to `:default`, but the names are distinct so you can route them to dedicated queues in production:
 
 ```ruby
 # backend/config/initializers/spree.rb
-Spree.queues.images = :images
-Spree.queues.search = :search
-Spree.queues.events = :events
-Spree.queues.webhooks = :webhooks
 Spree.queues.payment_webhooks = :payment_webhooks
-Spree.queues.products = :catalog
-Spree.queues.variants = :catalog
-Spree.queues.exports = :reports
-Spree.queues.imports = :imports
+Spree.queues.events           = :events
+Spree.queues.webhooks         = :webhooks
+Spree.queues.images           = :images
+Spree.queues.search           = :search
+Spree.queues.products         = :catalog
+Spree.queues.variants         = :catalog
+Spree.queues.exports          = :reports
+Spree.queues.imports          = :imports
 ```
 
 Then run Sidekiq with explicit queue weights:
@@ -170,7 +175,7 @@ bundle exec sidekiq -q payment_webhooks,5 -q events,4 -q default,3 -q search,2 -
 
 Why weights matter: payment webhooks must process fast (customer is waiting); image processing can lag. Without weights, image jobs flood and delay payment events.
 
-The full queue list lives in `Spree.queues` (see `bundle show spree_core`/lib/spree/core.rb).
+The full queue list lives in `Spree.queues` in `spree_core/lib/spree/core.rb` of the installed gem. Available: `default`, `events`, `exports`, `images`, `imports`, `products`, `reports`, `variants`, `taxons`, `stock_location_stock_items`, `coupon_codes`, `themes`, `addresses`, `gift_cards`, `webhooks`, `payment_webhooks`, `api_keys`, `search`, `stock_reservations`.
 
 ## Admin product table N+1
 
@@ -188,15 +193,15 @@ For the React dashboard, columns are populated via the Admin API which uses seri
 
 ### Russian-doll fragment caching
 
-For the storefront, cache fragments keyed by `Spree.cache_key_with_version`:
+For the storefront, cache fragments keyed by the model's `cache_key_with_version`:
 
 ```erb
-<% cache Spree.cache_key_with_version(product, ['pdp', 'v1']) do %>
+<% cache [product.cache_key_with_version, 'pdp', 'v1'] do %>
   <%= render 'pdp', product: product %>
 <% end %>
 ```
 
-Updates to the product (or any touched association) automatically bust the cache.
+Updates to the product (or any `touch:`-linked association) automatically bust the cache.
 
 ### Rails.cache for expensive computations
 
@@ -212,19 +217,18 @@ Don't cache anything tied to the customer (cart, account) — it varies per sess
 
 ### HTTP caching on the Store API
 
-`Spree::Api::V3::HttpCaching` concern (mixed into select controllers) sets ETag + Last-Modified based on the model. CDN respects these. For most read endpoints, including this concern is enough.
+Spree's v3 controllers set ETag and Last-Modified headers based on the model's `cache_key_with_version` and `updated_at`. CDNs (Cloudflare, Fastly, CloudFront) respect these — configure them to cache `/api/v3/store/products`-style endpoints with conditional revalidation.
 
 ## Profiling tools
 
-- **rack-mini-profiler** — already in `:development` group. Look for the badge on every page; click for the query waterfall.
-- **bullet** — detects N+1s in development. Add to the Gemfile, configure to notify on N+1.
-- **Skylight / Scout / NewRelic** — production APM. All work fine with Spree out of the box.
-- **`Spree::Subscribers::ActiveSupport::Notifications`** — Spree fires `sql.active_record`, `cache.read`, `cache.write` notifications. Hook into them for custom dashboards.
+- **rack-mini-profiler** — usually in the `:development` group. Look for the badge on every page; click for the query waterfall.
+- **bullet** — detects N+1s in development. Add to the Gemfile and configure to notify on N+1.
+- **Skylight / Scout / New Relic** — production APM. All work fine with Spree out of the box.
+- **ActiveSupport::Notifications** instrumentation — Spree (via Rails) fires `sql.active_record`, `process_action.action_controller`, `cache.read`, `cache.write`. Hook into them for custom dashboards: `ActiveSupport::Notifications.subscribe('sql.active_record') { |...| ... }`.
 
 ## Where to read further
 
-- **Queue config:** `bundle show spree_core`/lib/spree/core.rb (`Spree.queues`).
 - **Cart pipeline:** `Spree::Cart::Recalculate` and its dependencies in `spree_core/app/services/spree/cart/`.
-- **Search provider:** `Spree::SearchProvider::Base` and the Meilisearch subclass.
-- **Docs:** `backend/node_modules/@spree/docs/dist/developer/deployment/performance.mdx` (if shipped) or the deployment section generally.
-- **CLAUDE.md performance guidance** in your project root may have project-specific notes.
+- **Search provider:** `Spree::SearchProvider::Base` and `Spree::SearchProvider::Meilisearch` in the installed `spree_core` gem.
+- **Deployment caching:** `node_modules/@spree/docs/dist/developer/deployment/caching.mdx`.
+- **Search + filtering:** `node_modules/@spree/docs/dist/developer/core-concepts/search-filtering.mdx`.

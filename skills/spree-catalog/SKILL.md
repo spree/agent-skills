@@ -11,7 +11,7 @@ The catalog is everything that's for sale: Products, the Variants underneath the
 
 ```
 Product
-  ├── Variant (one master + zero or more "real" variants; default_variant_id in 6.0)
+  ├── Variant (one master + zero or more "real" variants; `default_variant_id` FK on Product)
   │     ├── Price (per currency)
   │     ├── StockItem (per stock location)
   │     ├── VariantMedia (images, videos, focal point — 5.5)
@@ -19,7 +19,7 @@ Product
   ├── Category × CategoryProduct (the join)
   ├── ProductPublication × Channel (5.5 — which channels surface this product)
   ├── ProductPromotionRule (which promos this product qualifies for)
-  └── Metafield (custom fields — 5.4+, renaming to CustomField in 6.0)
+  └── Metafield (custom fields — 5.4+)
 ```
 
 ## Product vs Variant
@@ -28,9 +28,9 @@ The **Product** is the storefront concept — name, slug, description, category.
 
 The **Variant** is the SKU — what gets added to a cart, what has a price, what has inventory. A Product has at least one Variant.
 
-### Master variant (5.x convention)
+### Master variant and default variant
 
-Every Product has a "master" Variant — `Product.master` — which holds default attributes (price, weight, SKU) when the Product has no real variants. Real variants override.
+Every Product has a "master" Variant — `Product.master` — which historically holds default attributes (price, weight, SKU) when the Product has no real variants. Real variants override.
 
 ```ruby
 product = Spree::Product.find_by(slug: 'cool-shirt')
@@ -39,13 +39,15 @@ product.variants          # => non-master "real" variants (color/size combos)
 product.variants_including_master   # => everything
 ```
 
-If a Product has variants (color × size), the master is mostly a placeholder. Default pricing/SKU still lives there as a fallback.
+If a Product has variants (color × size), the master is mostly a placeholder; default pricing/SKU still lives there as a fallback.
 
-### Coming in 6.0: `is_master` drops, `default_variant_id` arrives
+A newer column, `Product.default_variant_id`, can also point at a chosen variant directly:
 
-The 6.0 plan drops the `is_master` boolean and the implicit master concept. Each Product gets a `default_variant_id` FK pointing at one of its variants. Cleaner semantics — no special master/non-master distinction.
+```ruby
+product.default_variant   # => the variant chosen as "default" (uses default_variant_id when set)
+```
 
-**5.x code: keep using `product.master` and `product.variants`.** 6.0 will introduce `product.default_variant` and `product.variants` (no special master anymore). Don't pre-write 6.0 code on 5.x.
+New code can reach for `default_variant`; the master accessor remains for backwards compatibility.
 
 ## Options + OptionTypes + OptionValues
 
@@ -86,22 +88,22 @@ red = color.option_values.create!(name: 'red', presentation: 'Red', color_code: 
 
 ## Categories (formerly Taxons)
 
-Spree 5.5 renamed the Taxon model to **Category** for the merchant-facing concept (the 6.0 plan finishes the table rename, but the class alias `Spree::Category < Spree::Taxon` is already in 5.5).
+Spree 5.5 added `Spree::Category` as an alias of `Spree::Taxon` — the merchant-facing concept for the hierarchical product grouping.
 
 ```
 Category (hierarchical — left/right via awesome_nested_set)
-  ├── CategoryProduct (the join — multiple Products per Category, multiple Categories per Product)
+  ├── Classification (the join — multiple Products per Category, multiple Categories per Product)
   ├── permalink         (URL slug, hierarchical: "men/shirts/casual")
   └── i18n on name + description
 ```
 
-Spree 5.5 also introduces **Collection** — a flat or rule-based grouping (e.g. "Summer Sale", "New Arrivals") that's separate from the hierarchical Category tree. The model rename to drop "Taxon" entirely is pending 6.0.
+Code can use either `Spree::Category` or `Spree::Taxon` — they point at the same model. Use `Spree::Category` in new code; the legacy class name remains for backwards compatibility.
 
 ```ruby
 shirts = Spree::Category.find_by(permalink: 'men/shirts')
-shirts.products              # => all Products in this Category
-shirts.descendants           # => sub-categories
-shirts.products_in_subtree   # => Products in this Category or any descendant
+shirts.products                          # => Products directly in this Category
+shirts.descendants                       # => sub-categories
+shirts.active_products_with_descendants  # => active Products in this Category or any descendant
 ```
 
 ## ProductPublication (5.5 — channel-scoped visibility)
@@ -109,11 +111,11 @@ shirts.products_in_subtree   # => Products in this Category or any descendant
 In 5.5, products belong to a Store via `store_id` (single owner). Visibility per Channel is managed via `ProductPublication`:
 
 ```ruby
-product.publications        # ProductPublication × Channel
-product.publications.where(channel: store.default_channel).first.published?   # is it live on the default channel
+product.product_publications                                           # ProductPublication × Channel
+product.product_publications.where(channel: store.default_channel)     # publication for the default channel
 ```
 
-A ProductPublication has `published_at` and `unpublished_at` windows. The `Product.for_store(store)` scope returns products visible on a store; `Product.available(currency)` adds availability + pricing filters.
+A ProductPublication has `published_at` and `unpublished_at` windows. The `Product.for_store(store)` scope returns products visible on a store; `Product.active(currency)` filters to products that are live with prices in the requested currency.
 
 **Pre-5.5 (4.x, early 5.x):** Products were on Stores directly via `spree_products_stores`. The 5.4→5.5 upgrade migrates this. See the `spree-upgrade` skill.
 
@@ -142,35 +144,20 @@ The task is a no-op on the Database provider (no index to maintain) and a full c
 
 ### Custom searchable attributes
 
-Override `searchable_data` on `Spree::Product` (decorator):
-
-```ruby
-module Spree::ProductDecorator
-  def searchable_data
-    super.merge(
-      brand_name: brand&.name,
-      season: metafields_for('catalog').find { |m| m.key == 'season' }&.value
-    )
-  end
-
-  Spree::Product.prepend self
-end
-```
-
-After deploying, reindex.
+Spree's search-indexed fields come from `Spree::Product#search_presentation`, which returns the hash that's pushed to the index. Override via a decorator or — preferred — swap the presenter via `Spree::Dependencies.search_product_presenter_class`. After changes, reindex.
 
 ## Images + Media
 
-5.5 introduced product-level media (`Spree::VariantMedia` — name is misleading; it's product-level, owned via the master variant). Media types: `image`, `external_video_url`. Includes `focal_point` for crop-aware thumbnails.
+5.5 added product-level media. Media records (`Spree::Asset` subclasses) have a `media_type` from `Spree::Asset::MEDIA_TYPES = %w[image video external_video]`. External videos store their URL in `external_video_url`; uploaded videos and images use ActiveStorage attachments. `focal_point` enables crop-aware thumbnails on images.
 
 ```ruby
-product.master.media     # all media for the product
-product.master.media.where(media_type: 'image').first
+product.media                                       # all media for the product
+product.media.where(media_type: 'image').first      # first image
 ```
 
-The legacy variant-level `Spree::Image` (via `Spree::Asset`) still exists pre-5.5. The 5.4→5.5 upgrade has an opt-in rake task `spree:media:migrate_master_images_to_product_media` to move them.
+The legacy variant-level `Spree::Image` (via `Spree::Asset`) still exists for variants. Variants also expose `variant_media`, `associated_media`, and `gallery_media` for finer-grained queries.
 
-Images use ActiveStorage. Variants (resized derivatives like thumb/small/large) are generated lazily on first request via the `image_processing` gem. Pre-generating is possible via a background job.
+Images use ActiveStorage. Resized derivatives (thumb/small/large) are generated lazily on first request via the `image_processing` gem. Pre-generating is possible via a background job — see the `spree-performance` skill.
 
 ## Brand (custom — your Product's brand)
 
@@ -196,7 +183,7 @@ end
 Walk this list:
 
 1. **Is it on the store?** `Spree::Product.for_store(store).where(id: id).exists?` — if false, the Product has no `store_id` or no ProductPublication on any of the store's channels.
-2. **Is it published on the current channel?** `product.publications.where(channel: Spree::Current.channel).any?` — if false, no ProductPublication for the channel in scope.
+2. **Is it published on the current channel?** `product.product_publications.where(channel: Spree::Current.channel).any?` — if false, no ProductPublication for the channel in scope.
 3. **Is the publication window active?** `published_at < Time.current` AND (`unpublished_at` is nil OR `unpublished_at > Time.current`).
 4. **Does it have a price in the current currency?** `product.master.prices.where(currency: Spree::Current.currency).any?`
 5. **Is it in stock?** `product.in_stock?` — false if no `track_inventory` variant has positive stock.
@@ -208,18 +195,18 @@ For currency-wide price changes, batch via `Spree::Price.where(currency: 'USD').
 
 ### "Add a custom field to Products"
 
-Use Metafields (5.4) — no decorator, no schema change:
+Use Metafields (5.4) — no decorator, no schema change. First create a `MetafieldDefinition` (in the admin or via seed/migration) with a namespace + key + type + `display_on` (`front_end`, `back_end`, or `both`). Then set values per record:
 
 ```ruby
-product.metafields.create!(key: 'season', value: 'fall-2026', kind: 'short_text', visibility: 'public')
-product.metafield('season')   # => "fall-2026"
+product.set_metafield('catalog.season', 'fall-2026')
+product.get_metafield('catalog.season')   # => "fall-2026"
 ```
 
-Public metafields surface on the Store API; private ones are admin-only. See `Spree::Metafields` concern and the `spree-resource` skill (`--metafields` flag) for built-in support.
+`display_on: front_end` (or `both`) surfaces the metafield on the Store API; `back_end` is admin-only. See `Spree::Metafields` concern and the `spree-resource` skill (`--metafields` flag) for built-in support.
 
 ## Where to read further
 
-- **Core concepts:** `backend/node_modules/@spree/docs/dist/developer/core-concepts/products.mdx` and `variants.mdx`.
-- **Search providers:** the `Spree::SearchProvider::Base` source documents the interface. Custom providers subclass and override `reindex` and `search`.
-- **Image processing:** `backend/node_modules/@spree/docs/dist/developer/core-concepts/media.mdx`.
-- **6.0 plans (if monorepo present):** `docs/plans/6.0-remove-master-variant.md`, `docs/plans/6.0-product-types.md`, `docs/plans/6.0-replace-taxons-with-categories.md`.
+- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/products.mdx`
+- **Media:** `node_modules/@spree/docs/dist/developer/core-concepts/media.mdx`
+- **Search + filtering:** `node_modules/@spree/docs/dist/developer/core-concepts/search-filtering.mdx`
+- **Custom search provider:** `node_modules/@spree/docs/dist/developer/how-to/custom-search-provider.mdx`

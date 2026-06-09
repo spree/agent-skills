@@ -5,9 +5,9 @@ description: Use when the user is working on the optional Next.js storefront (th
 
 # Spree Storefront (Next.js)
 
-The Spree storefront is a separate Next.js 16 application that talks to the Spree backend over the v3 Store API. It lives at `apps/storefront/` in projects scaffolded by `create-spree-app --storefront`, and the repo is `github.com/spree/storefront`.
+The Spree Next.js storefront is a separate application that talks to the Spree backend over the v3 Store API. It's hosted at `github.com/spree/storefront` and cloned separately into your project tree.
 
-The storefront is **optional**. Headless deployments may use a custom frontend instead — React Native, Astro, Remix, or hand-rolled. Spree's job is to expose a clean API; what consumes it is your choice. This skill assumes the official Next.js storefront, but the API contract is identical for any frontend.
+The storefront is **optional**. Headless deployments may use a custom frontend — React Native, Astro, Remix, or hand-rolled. Spree's job is to expose a clean API; what consumes it is your choice. This skill assumes the official Next.js storefront, but the API contract is identical for any frontend.
 
 ## How it connects to Spree
 
@@ -20,9 +20,9 @@ Browser ──HTTPS──> Next.js storefront ──API──> Spree backend (Ra
 The storefront authenticates against the Spree backend via a **publishable API key** (`pk_…` prefix). Customer-bound operations (their cart, their account) use additional auth — JWT for logged-in customers, cart tokens for guest carts.
 
 ```bash
-# apps/storefront/.env.local
-NEXT_PUBLIC_SPREE_API_URL=http://localhost:3000
-NEXT_PUBLIC_SPREE_API_KEY=pk_…
+# .env.local — server-side only (the storefront makes all API calls via Server Actions)
+SPREE_API_URL=http://localhost:3000
+SPREE_PUBLISHABLE_KEY=pk_…
 ```
 
 ## @spree/sdk — the canonical client
@@ -33,14 +33,13 @@ Don't hand-write fetch calls. Use `@spree/sdk` for typed access to the Store API
 import { createClient } from '@spree/sdk'
 
 const spree = createClient({
-  host: process.env.NEXT_PUBLIC_SPREE_API_URL,
-  bearerToken: process.env.NEXT_PUBLIC_SPREE_API_KEY,
+  baseUrl: process.env.SPREE_API_URL!,
+  publishableKey: process.env.SPREE_PUBLISHABLE_KEY!,
 })
 
 // List products
 const { data, meta } = await spree.products.list({
-  include: 'images,default_variant',
-  filter: { available: true },
+  expand: ['images', 'default_variant'],
 })
 
 // Get a single product by slug or prefixed ID
@@ -49,11 +48,11 @@ const product = await spree.products.get('cool-shirt')
 // Create a cart
 const cart = await spree.carts.create()
 
-// Add item to cart
-await spree.carts.items.create(cart.token, {
+// Add item to cart — cart ID positional, token via options.spreeToken
+await spree.carts.items.create(cart.id, {
   variant_id: 'variant_k5nR8xLq',
   quantity: 1,
-})
+}, { spreeToken: cart.token })
 ```
 
 The SDK includes:
@@ -74,29 +73,27 @@ The SDK includes:
 The customer login flow:
 
 ```ts
-const { access_token, refresh_token } = await spree.auth.login({
+const { token, refresh_token, user } = await spree.auth.login({
   email: 'jane@example.com',
   password: 'secret',
 })
 
-// Subsequent calls
-const customerSpree = createClient({
-  host: process.env.NEXT_PUBLIC_SPREE_API_URL,
-  bearerToken: process.env.NEXT_PUBLIC_SPREE_API_KEY,
-  customerToken: access_token,
-})
+// Pass the JWT per request via options.token
+const orders = await spree.customer.orders.list({}, { token })
+const me = await spree.customer.get({ token })
 
-const orders = await customerSpree.account.orders.list()
+// Refresh later
+const { token: newToken } = await spree.auth.refresh({ refresh_token })
 ```
 
 ## Channels — which sales surface
 
-If the merchant has multiple channels (website, mobile app, in-store POS), the storefront should identify which one it represents. Set the channel header via the SDK:
+If the merchant has multiple channels (website, mobile app, in-store POS), the storefront should identify which one it represents. Set the channel via the SDK config:
 
 ```ts
 const spree = createClient({
-  host: '…',
-  bearerToken: pk,
+  baseUrl: process.env.SPREE_API_URL!,
+  publishableKey: process.env.SPREE_PUBLISHABLE_KEY!,
   channel: 'online',         // channel code; or prefixed ID like 'ch_…'
 })
 ```
@@ -108,36 +105,41 @@ The Spree backend uses `Spree::Current.channel` to scope queries — only produc
 ### Server-rendered PDP
 
 ```tsx
-// apps/storefront/app/products/[slug]/page.tsx
+// app/products/[slug]/page.tsx
 import { spree } from '@/lib/spree'
 
 export default async function ProductPage({ params }: { params: { slug: string } }) {
   const product = await spree.products.get(params.slug, {
-    include: 'default_variant,variants,images,categories',
+    expand: ['default_variant', 'variants', 'images', 'categories'],
   })
 
   return (
     <main>
-      <h1>{product.data.name}</h1>
-      <img src={product.data.relationships.images.data[0]?.src} alt="" />
-      <AddToCartButton variantId={product.data.relationships.default_variant.data.id} />
+      <h1>{product.name}</h1>
+      <img src={product.images?.[0]?.url} alt="" />
+      <AddToCartButton variantId={product.default_variant_id} />
     </main>
   )
 }
 ```
 
+The v3 Store API uses **flat responses** — `product.name`, not `product.data.attributes.name`. Related records appear as either ID fields (e.g. `default_variant_id`) or, when expanded, as nested objects (e.g. `product.default_variant`, `product.images[]`).
+
 ### Client-side cart
 
-Carts are server-state, so use SWR or React Query. The cart token persists in a cookie or localStorage:
+Carts are server-state, so use SWR or React Query. The cart ID + token persist in a cookie:
 
 ```tsx
 'use client'
 import useSWR from 'swr'
 
-export function MiniCart({ token }: { token: string }) {
-  const { data: cart } = useSWR(['cart', token], () => spree.carts.get(token))
+export function MiniCart({ cartId, token }: { cartId: string; token: string }) {
+  const { data: cart } = useSWR(
+    ['cart', cartId],
+    () => spree.carts.get(cartId, {}, { spreeToken: token })
+  )
   if (!cart) return null
-  return <span>{cart.data.relationships.line_items.data.length} items</span>
+  return <span>{cart.line_items.length} items</span>
 }
 ```
 
@@ -145,33 +147,38 @@ export function MiniCart({ token }: { token: string }) {
 
 The Store API exposes payment sessions for the checkout flow. Each payment provider has its own session creation endpoint (Stripe, Adyen, PayPal). The pattern:
 
-1. Customer hits checkout — `POST /api/v3/store/carts/:token/payment_sessions` with a payment method choice.
+1. Customer hits checkout — `POST /api/v3/store/carts/:cart_id/payment_sessions` with a payment method choice (cart token in `X-Spree-Token` header).
 2. Backend returns a session with provider-specific data (Stripe Checkout URL, Adyen drop-in token, etc.).
 3. Storefront redirects to the provider OR renders the provider's embedded form.
 4. Customer completes — provider posts back to the Spree backend, which fires `payment_session.completed` events.
 5. Storefront polls or webhook-listens for completion, then transitions cart → order.
 
-The official `spree_stripe` / `spree_adyen` extensions ship reference checkout flows. Don't roll your own unless you're integrating a new provider.
+The `spree_stripe` / `spree_adyen` / `spree_paypal_checkout` gems ship reference checkout flows. Don't roll your own unless you're integrating a new provider.
 
 ### Webhook handling
 
-For Next.js storefronts, `@spree/sdk/webhooks` provides typed webhook event handlers with signature verification:
+For Next.js storefronts, `@spree/sdk/webhooks` provides HMAC signature verification with typed event payloads:
 
 ```ts
-// apps/storefront/app/api/webhooks/spree/route.ts
-import { verifyWebhook } from '@spree/sdk/webhooks'
+// app/api/webhooks/spree/route.ts
+import { verifyWebhookSignature, type WebhookEvent } from '@spree/sdk/webhooks'
 
 export async function POST(req: Request) {
-  const event = await verifyWebhook(req, {
-    secret: process.env.SPREE_WEBHOOK_SECRET!,
-  })
+  const body = await req.text()
+  const signature = req.headers.get('x-spree-webhook-signature') ?? ''
+  const timestamp = req.headers.get('x-spree-webhook-timestamp') ?? ''
 
-  switch (event.type) {
+  if (!verifyWebhookSignature(body, signature, timestamp, process.env.SPREE_WEBHOOK_SECRET!)) {
+    return new Response('Invalid signature', { status: 401 })
+  }
+
+  const event: WebhookEvent = JSON.parse(body)
+  switch (event.name) {
     case 'order.completed':
-      await sendCustomThankYouEmail(event.data)
+      await sendCustomThankYouEmail(event.payload)
       break
     case 'order.shipped':
-      await pushShippingNotification(event.data)
+      await pushShippingNotification(event.payload)
       break
   }
 
@@ -179,7 +186,7 @@ export async function POST(req: Request) {
 }
 ```
 
-The Spree backend ships outbound webhooks in `Spree::WebhookSubscription`. Configure URL + events under Settings → Webhooks in the admin.
+The Spree backend ships outbound webhooks as `Spree::WebhookEndpoint` records. Configure URL + events under Settings → Webhooks in the admin.
 
 ## Storefront vs backend — where does the change belong
 
@@ -209,7 +216,7 @@ The rule: **anything customer-visible is the storefront. Anything that touches d
 
 ## Where to read further
 
-- **SDK docs:** `packages/sdk/README.md` in the Spree monorepo or `node_modules/@spree/sdk/README.md` in your storefront project.
-- **Store API reference:** `node_modules/@spree/docs/dist/api-reference/store.yaml` — every endpoint, parameter, response schema.
-- **Tutorial:** `node_modules/@spree/docs/dist/developer/tutorial/store-api.mdx` and `sdk.mdx` walk through common storefront integrations.
-- **Storefront source:** `github.com/spree/storefront` is open source — reference implementations for product listing, cart, checkout, account pages.
+- **SDK docs:** `node_modules/@spree/docs/dist/developer/sdk/quickstart.mdx` (also at https://spreecommerce.org/docs/developer/sdk/quickstart)
+- **Storefront docs:** `node_modules/@spree/docs/dist/developer/storefront/nextjs/architecture.mdx`, `customization.mdx`, `deployment.mdx`
+- **Storefront tutorial:** `node_modules/@spree/docs/dist/developer/tutorial/store-api.mdx`, `sdk.mdx`
+- **Storefront source:** https://github.com/spree/storefront — reference implementations for product listing, cart, checkout, account pages

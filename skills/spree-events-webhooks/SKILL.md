@@ -30,37 +30,41 @@ Subscribers fire **after the transaction commits**. If the database write fails,
 
 ### Writing a subscriber
 
+Drop the file under `app/subscribers/` — Spree auto-registers anything there at Rails boot. No initializer needed.
+
 ```ruby
-# backend/app/subscribers/spree/order_complete_subscriber.rb
-module MyApp
-  class OrderCompleteSubscriber < Spree::Subscriber
-    subscribes_to 'order.completed'
+# app/subscribers/order_complete_subscriber.rb
+class OrderCompleteSubscriber < Spree::Subscriber
+  subscribes_to 'order.completed'
 
-    def handle(event)
-      order = Spree::Order.find_by_prefix_id(event.payload['id'])
-      return unless order
-
-      ExternalErp.sync_order(order)
-    end
+  def call(event)
+    order_id = event.payload['id']
+    ExternalErp.sync_order(order_id)
   end
 end
 ```
 
-Register in `backend/config/initializers/spree.rb`:
+The default handler method is `call(event)`. Subscribers run **asynchronously** via `Spree::Events::SubscriberJob` by default; opt into synchronous execution only when the side effect must complete before the publisher's transaction returns:
 
 ```ruby
-Rails.application.config.after_initialize do
-  Spree.subscribers << MyApp::OrderCompleteSubscriber
+class CriticalOrderHandler < Spree::Subscriber
+  subscribes_to 'order.completed', async: false
+
+  def call(event)
+    # Runs inline, blocks the publisher
+  end
 end
 ```
 
 ### Multiple events from one subscriber
 
+Single handler, dispatch on `event.name`:
+
 ```ruby
 class OrderActivitySubscriber < Spree::Subscriber
   subscribes_to 'order.completed', 'order.paid', 'order.shipped'
 
-  def handle(event)
+  def call(event)
     case event.name
     when 'order.completed' then track_completion(event)
     when 'order.paid'      then track_payment(event)
@@ -70,19 +74,40 @@ class OrderActivitySubscriber < Spree::Subscriber
 end
 ```
 
-### Background processing
+Or use the `on` DSL to route specific events to specific methods:
 
 ```ruby
-class OrderCompleteSubscriber < Spree::Subscriber
-  subscribes_to 'order.completed', async: true
+class PaymentSubscriber < Spree::Subscriber
+  subscribes_to 'payment.completed', 'payment.voided'
 
-  def handle(event)
-    HeavyExternalSync.call(event.payload['id'])
+  on 'payment.completed', :handle_complete
+  on 'payment.voided', :handle_void
+
+  private
+
+  def handle_complete(event)
+    # ...
+  end
+
+  def handle_void(event)
+    # ...
   end
 end
 ```
 
-`async: true` enqueues `Spree::EventSubscriberJob` instead of running inline. Use it for anything that hits an external API.
+### Pattern matching
+
+Wildcards subscribe to a family of events:
+
+```ruby
+class OrderEventLogger < Spree::Subscriber
+  subscribes_to 'order.*'
+
+  def call(event)
+    Rails.logger.info("Order event: #{event.name}")
+  end
+end
+```
 
 ## Part 2: Webhooks (outbound HTTPS)
 
@@ -139,10 +164,11 @@ X-Spree-Webhook-Timestamp: 1728432000
 X-Spree-Webhook-Event: order.completed
 
 {
-  "id": "evt_AbCd1234EfGh",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
   "name": "order.completed",
+  "store_id": 1,
   "created_at": "2026-06-08T12:00:00Z",
-  "data": {
+  "payload": {
     "id": "or_m3Rp9wXz",
     "number": "R123456789",
     "total": "129.99",
@@ -233,7 +259,9 @@ In production, endpoint URLs are validated against private IP ranges (RFC 1918, 
 |---|---|
 | `order.completed` | Customer finalizes the order (post-payment) |
 | `order.paid` | All payments processed successfully |
-| `order.shipped` | At least one shipment marked shipped |
+| `order.shipped` | At least one shipment is marked shipped |
+| `order.approved` | An admin approves a pending order |
+| `order.canceled` | Order is canceled |
 | `order.resumed` | A canceled order is reactivated |
 | `order.updated` | General-purpose order change event |
 
@@ -245,14 +273,34 @@ In production, endpoint URLs are validated against private IP ranges (RFC 1918, 
 | `payment.paid` | Payment moves to paid state |
 | `payment.voided` | Payment voided before capture |
 
-### Payment session lifecycle (5.4+)
+### Payment session lifecycle
 
 | Event | When |
 |---|---|
+| `payment_session.processing` | Session is being processed by the provider |
 | `payment_session.completed` | Session completes (returns to your app from payment provider) |
 | `payment_session.failed` | Provider returned failure |
 | `payment_session.canceled` | Customer canceled |
 | `payment_session.expired` | Session timed out |
+
+Payment **setup** sessions (saving a payment method without charging) fire the same set: `payment_setup_session.processing`, `.completed`, `.failed`, `.canceled`, `.expired`.
+
+### Shipment lifecycle
+
+| Event | When |
+|---|---|
+| `shipment.shipped` | Shipment marked shipped (tracking set) |
+| `shipment.canceled` | Shipment canceled |
+| `shipment.resumed` | A previously-canceled shipment is resumed |
+
+### Product lifecycle
+
+| Event | When |
+|---|---|
+| `product.activated` | Product becomes available for sale |
+| `product.archived` | Product is archived |
+| `product.back_in_stock` | A product moves from out-of-stock to in-stock |
+| `product.out_of_stock` | A product becomes out of stock |
 
 ### Gift cards
 
@@ -260,6 +308,16 @@ In production, endpoint URLs are validated against private IP ranges (RFC 1918, 
 |---|---|
 | `gift_card.redeemed` | Card fully redeemed |
 | `gift_card.partially_redeemed` | Card partially redeemed |
+
+### Returns + reimbursements
+
+| Event | When |
+|---|---|
+| `return_authorization.canceled` | Return authorization canceled |
+| `return_item.given` | A return item is given to the customer (exchange) |
+| `return_item.received` | A return item is received back from the customer |
+| `return_item.canceled` | A return item line is canceled |
+| `reimbursement.reimbursed` | Reimbursement processed (refund or store credit issued) |
 
 ### Imports
 
@@ -276,6 +334,13 @@ In production, endpoint URLs are validated against private IP ranges (RFC 1918, 
 | `invitation.created` | Staff/customer invitation sent |
 | `invitation.accepted` | Invitee created their account |
 | `invitation.resent` | Invitation re-sent |
+
+### Newsletter
+
+| Event | When |
+|---|---|
+| `newsletter_subscriber.subscription_requested` | Customer requested a subscription (pending double opt-in) |
+| `newsletter_subscriber.verified` | Customer confirmed the subscription |
 
 ### Automatic lifecycle events
 
@@ -325,7 +390,7 @@ For **webhook** payloads, the same data is wrapped in the envelope shown above (
 | Update internal analytics service | Subscriber |
 | Invalidate Rails cache | Subscriber (inline, not async) |
 | Notify customer's Zapier workflow | Webhook |
-| Trigger Shopify Flow / n8n / Make.com | Webhook |
+| Trigger n8n / Zapier / Make.com workflows | Webhook |
 | Update partner system across the internet | Webhook |
 | Notify your own non-Rails service | Webhook (or message bus if scaled) |
 
@@ -412,7 +477,7 @@ Almost always one of:
 ## Where to read further
 
 - **Subscriber base class:** `Spree::Subscriber` source.
-- **Customization docs:** `backend/node_modules/@spree/docs/dist/developer/customization/events.mdx`.
+- **Customization docs:** `node_modules/@spree/docs/dist/developer/customization/events.mdx`.
 - **Webhook source:** `Spree::WebhookEndpoint`, `Spree::WebhookDelivery`, `Spree::Webhooks::DeliverWebhook`, `Spree::WebhookEventSubscriber`.
 - **Admin UI:** Settings → Webhooks (manages endpoints, view delivery history with response codes/bodies, replay failed deliveries).
 - **For the API surface:** see the `spree-api-v3` skill — webhook endpoints have full CRUD via `/api/v3/admin/webhook_endpoints`.

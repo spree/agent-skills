@@ -39,10 +39,6 @@ checkout  →  processing  →  pending  →  completed
 
 Transitions are events: `started_processing`, `pend`, `complete`, `failure`, `void`, `invalidate`. After-callbacks fire `payment.completed` / `payment.voided` events. See the `spree-events-webhooks` skill.
 
-### `state` → `status` rename (6.0)
-
-In 6.0, Payment.state becomes Payment.status (along with Shipment, InventoryUnit, ReturnAuthorization, GiftCard). On 5.x, use `payment.state`. On 6.0, use `payment.status`. Same values, different column name.
-
 ## Payment methods
 
 A PaymentMethod is configured in the admin (Settings → Payments). The model carries:
@@ -131,8 +127,8 @@ refund = payment.refunds.create!(
   reason: Spree::RefundReason.find_by(name: 'Goodwill'),
   refunder: current_user
 )
-# Then process via the gateway:
-refund.process!
+# Then process via the gateway (calls the gateway and writes transaction_id):
+refund.perform!
 ```
 
 For partial refunds with return authorizations, the chain is:
@@ -140,7 +136,7 @@ For partial refunds with return authorizations, the chain is:
 Customer requests return → ReturnAuthorization → CustomerReturn → Reimbursement → Refund / StoreCredit
 ```
 
-This is being significantly restructured in 6.0 — see the `Returns/Exchanges/Claims` plan in `docs/plans/6.0-returns-exchanges-claims.md`. On 5.x, the chain works but is awkward.
+See the `spree-shipping-fulfillment` skill for the reverse-logistics chain.
 
 ## Store credits
 
@@ -152,12 +148,11 @@ user.store_credits.create!(
   currency: 'USD',
   amount: 50.00,
   category: Spree::StoreCreditCategory.find_by(name: 'Goodwill'),
-  created_by: current_admin_user,
-  type_name: 'Goodwill credit'
+  created_by: current_admin_user
 )
 ```
 
-Categories are admin-managed (Settings → Store Credit Categories). Non-expiring categories (configured via `Spree::Config[:non_expiring_credit_types]`) don't have a TTL.
+Categories are admin-managed (Settings → Store Credit Categories).
 
 ## Gift cards
 
@@ -167,10 +162,12 @@ Events fired: `gift_card.redeemed`, `gift_card.partially_redeemed`. See the `spr
 
 ```ruby
 gc = Spree::GiftCard.create!(
+  store: current_store,
   amount: 100.00,
   currency: 'USD',
-  recipient_email: 'jane@example.com',
-  code: SecureRandom.alphanumeric(16).upcase  # or let Spree generate
+  code: SecureRandom.alphanumeric(16).upcase,  # optional — Spree generates if omitted
+  expires_at: 1.year.from_now,                 # optional
+  created_by: current_admin_user
 )
 ```
 
@@ -197,5 +194,5 @@ The webhook arrived before the storefront's redirect-back, OR the PaymentSession
 - **Payment source:** `bundle show spree_core`/app/models/spree/payment.rb — the state machine and processing methods.
 - **Payment processing:** `Spree::Payment::Processing` concern — `purchase`, `authorize`, `capture`, `void`, `credit` methods.
 - **PaymentSession:** `Spree::PaymentSession` — the 5.4+ redirect-flow wrapper.
-- **Docs:** `backend/node_modules/@spree/docs/dist/developer/core-concepts/payments.mdx`.
+- **Docs:** `node_modules/@spree/docs/dist/developer/core-concepts/payments.mdx`.
 - **Stripe gem:** `github.com/spree/spree_stripe` — best reference for a real-world payment integration.

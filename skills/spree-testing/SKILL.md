@@ -266,7 +266,7 @@ Many Capybara matchers (`have_content`, `have_css`) auto-poll, so they often wor
 
 ### Admin SPA E2E tests (different)
 
-The 6.0 React admin SPA uses **Playwright**, not Capybara. See `packages/dashboard/e2e/` and the `spree-dashboard` skill. Different runner, different style — UI-only assertions, no `waitForResponse` on API calls.
+The React admin (`@spree/dashboard`) uses **Playwright**, not Capybara. See the `spree-dashboard` skill. Different runner, different style — UI-only assertions, no `waitForResponse` on API calls.
 
 ## Running tests
 

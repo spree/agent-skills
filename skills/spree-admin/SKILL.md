@@ -1,13 +1,13 @@
 ---
 name: spree-admin
-description: Use when the user is customizing the legacy Rails admin (the `spree_admin` gem) — adding a new resource page, registering a sidebar item, customizing a column in an admin table, overriding a view, scaffolding a new admin section. The legacy admin is the default on Spree 5.x and earlier; Spree 6.0 replaces it with a React SPA covered by the spree-dashboard skill. Common phrasings include "add admin page", "Rails admin", "spree_admin", "scaffold admin resource", "admin sidebar", "override admin view", "Hotwire admin", "Turbo admin". If the project is on Spree 6.0+ AND using the React dashboard, use the spree-dashboard skill instead.
+description: Use when the user is customizing the legacy Rails admin (the `spree_admin` gem) — adding a new resource page, registering a sidebar item, customizing a column in an admin table, overriding a view, scaffolding a new admin section. The legacy admin is the Rails/Turbo admin; the React `@spree/dashboard` is the alternative covered by the spree-dashboard skill. Common phrasings include "add admin page", "Rails admin", "spree_admin", "scaffold admin resource", "admin sidebar", "override admin view", "Hotwire admin", "Turbo admin". If the project uses the React dashboard, use the spree-dashboard skill instead.
 ---
 
 # Spree Legacy Rails Admin (`spree_admin`)
 
-The legacy admin is a Rails engine — server-rendered ERB views, Stimulus + Turbo for interactivity, Tailwind for styling. It's the admin that ships on Spree 5.x and earlier, and 6.0 projects can stay on it if they don't want the React SPA.
+The legacy admin is a Rails engine — server-rendered ERB views, Stimulus + Turbo for interactivity, Tailwind for styling. It's the long-standing admin and remains a fully-supported option alongside the React `@spree/dashboard`.
 
-If you're working on Spree 6.0 with the React dashboard (`packages/dashboard`), see the **spree-dashboard** skill instead. This skill is specifically the `spree_admin` gem's Rails admin.
+If you're working on the React dashboard instead, see the **spree-dashboard** skill. This skill is specifically the `spree_admin` gem's Rails admin.
 
 ## Project layout
 
@@ -133,22 +133,12 @@ end
 
 For tables you generate yourself (via `spree_admin:scaffold`), the initializer is emitted with sensible defaults — `name`, `created_at`, `updated_at`. Add your domain-specific columns there.
 
-Custom column rendering: when a column's value isn't a direct attribute, define a method on the model or use a presenter:
+Custom column rendering: when a column's value isn't a direct attribute, define a method on the model or a presenter/decorator. The column's `name` references that method. For example, if you add a `brand_name` column to the Products table, define `brand_name` on the Product model or a presenter:
 
 ```ruby
 # In your model or decorator
 def brand_name
   brand&.name
-end
-
-# Or with a presenter
-# backend/app/presenters/spree/admin/product_presenter.rb
-module Spree::Admin
-  class ProductPresenter < SimpleDelegator
-    def brand_name
-      brand&.name
-    end
-  end
 end
 ```
 
@@ -223,7 +213,7 @@ For Turbo Streams (server-pushed UI updates), the same patterns apply as any Rai
 
 ## What the legacy admin doesn't ship that the React dashboard does
 
-If you're on Spree 6.0 and considering whether to stay on the legacy admin or migrate to the React dashboard, here's what each does well:
+If you're choosing between the legacy admin and the React dashboard, here's what each does well:
 
 | Feature | Legacy admin | React dashboard |
 |---|---|---|
@@ -240,7 +230,7 @@ If you don't need slots / TypeScript types / mobile, the legacy admin is more th
 ## Where to read further
 
 - **Admin source:** `bundle show spree_admin` to find the installed gem path. The README at the root of the gem covers the philosophy.
-- **Customization docs:** `backend/node_modules/@spree/docs/dist/developer/admin/` covers patterns.
+- **Customization docs:** `node_modules/@spree/docs/dist/developer/admin/` covers patterns.
 - **Navigation API:** `Spree::Admin::Navigation` source — the full method surface for nav customization.
 - **Table API:** `Spree::Admin::Tables` source — column types, options, sorting/filtering details.
 - **Scaffold generator:** `bundle show spree_admin`/lib/generators/spree/admin/scaffold/ has the template files you can copy for advanced customization.

@@ -5,11 +5,11 @@ description: Use when the user is working on Spree's checkout flow — cart pipe
 
 # Spree Checkout
 
-Checkout is how a cart becomes a completed order. In Spree, an Order is the cart (while in cart state) AND the completed transaction (post-complete); the `state` column tracks which phase you're in. This is changing in 6.0 (Cart and Order split into separate models) — but on 5.x they're one model with a state machine.
+Checkout is how a cart becomes a completed order. In Spree, an Order is the cart (while in cart state) AND the completed transaction (post-complete); the `state` column tracks which phase you're in.
 
 ## The order state machine
 
-Default flow on a Spree 5.x order:
+Default checkout flow on an Order:
 
 ```
 cart  →  address  →  delivery  →  payment  →  confirm  →  complete
@@ -42,9 +42,7 @@ cart.state                # => "address"
 
 ### `state` vs `status` columns
 
-Order has BOTH `state` (the checkout state machine) and `status` (a coarser lifecycle: cart/pending/active/cancelled). `payment_state` and `shipment_state` are separate denormalized columns.
-
-The 6.0 rename collapses some of these — see the `spree-data-model` skill.
+Order has BOTH `state` (the checkout state machine — values from the flow above) and `status` (the high-level lifecycle: `Spree::Order::STATUSES = %w[draft placed canceled]`). `payment_state` and `shipment_state` are separate denormalized columns reflecting the rollup of child Payment and Shipment states.
 
 ## The cart pipeline (recalculate chain)
 
@@ -81,18 +79,21 @@ module MyApp
       def call(order:, variant:, quantity: nil, metadata: {}, public_metadata: {}, private_metadata: {}, options: {})
         ApplicationRecord.transaction do
           run :add_to_line_item
-          run :my_custom_step
+          run :handle_stock_reservations     # keep the parent's stock reservation step
+          run :my_custom_step                # your custom logic
           run Spree.cart_recalculate_service
         end
       end
 
-      def my_custom_step
+      def my_custom_step(order:, variant:, **)
         # ...
       end
     end
   end
 end
 ```
+
+When you subclass `Spree::Cart::AddItem`, keep all the parent's `run` steps and slot yours in — don't drop `:handle_stock_reservations` or you'll silently break stock reservations for orders in checkout.
 
 ## Customizing the checkout flow
 
@@ -172,15 +173,6 @@ When the order transitions to `complete`:
 
 After complete, the order should be immutable from the customer's side. Admins can still adjust (refunds, return authorizations, edits) but those go through dedicated controllers, not the cart pipeline.
 
-## Coming in 6.0: Cart and Order split
-
-The 6.0 plan separates Cart and Order into distinct models. `Spree::Cart` owns the cart phase; `Spree::Order` is the post-complete record. `LineItem` becomes polymorphic to belong to either.
-
-**Today (5.x):** Use `state` to distinguish. `Spree::Order.where(state: 'complete')` is the completed orders.
-**6.0:** `Spree::Cart` and `Spree::Order` are separate. Carts are flushed periodically; Orders are permanent.
-
-Don't write 6.0 code on 5.x — the model split isn't there yet. See `docs/plans/6.0-cart-order-split.md` in the monorepo if you have it.
-
 ## Common checkout problems
 
 ### "Order stuck in `cart`"
@@ -196,7 +188,7 @@ Don't write 6.0 code on 5.x — the model split isn't there yet. See `docs/plans
 
 ### "Cart total doesn't match what's displayed"
 
-- The cart pipeline didn't run after the last change. Trigger `Spree::Cart::Recalculate.call(order: order)` manually and inspect.
+- The cart pipeline didn't run after the last change. Trigger `Spree::Cart::Recalculate.call(order: order, line_item: order.line_items.last)` manually and inspect.
 - A custom adjustment isn't being applied. Check `order.adjustments.eligible.sum(:amount)`.
 - Promotions are eligible but not applied. See the `spree-promotions` skill — common cause is promotion `usage_limit` exhausted.
 
@@ -217,8 +209,7 @@ end
 
 ## Where to read further
 
-- **Order source:** `bundle show spree_core`/app/models/spree/order/checkout.rb — the state machine wiring.
-- **Cart services:** `Spree::Cart::AddItem`, `Spree::Cart::Recalculate`, etc. live in `spree_core/app/services/spree/cart/`.
-- **Payment session refactor:** `docs/plans/payment-session-refactor.md` if you have the monorepo.
-- **6.0 cart/order split:** `docs/plans/6.0-cart-order-split.md`.
-- **Docs:** `backend/node_modules/@spree/docs/dist/developer/core-concepts/orders.mdx` and `payments.mdx`.
+- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/orders.mdx`, `payments.mdx`
+- **Checkout customization:** `node_modules/@spree/docs/dist/developer/customization/checkout.mdx`
+- **Order source:** `Spree::Order` and `Spree::Order::Checkout` in the installed `spree_core` gem — the state machine wiring.
+- **Cart services:** `Spree::Cart::AddItem`, `Spree::Cart::Recalculate`, etc. in `spree_core/app/services/spree/cart/`.

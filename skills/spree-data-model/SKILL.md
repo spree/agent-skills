@@ -1,11 +1,11 @@
 ---
 name: spree-data-model
-description: Use when the user is working with Spree's domain models — Orders, LineItems, Variants, Products, Stores, Channels, Markets, Payments, Shipments, Customers — or asking how these relate. Common phrasings include "how does X connect to Y", "what's the relationship between", "where does Spree store X", "how do I query orders across stores", "how do channels work", "what's the difference between Cart and Order". Provides the relationship map and key conventions; defers to local @spree/docs for field-level detail.
+description: Use when the user is asking how Spree's domain models relate — Orders, LineItems, Variants, Products, Stores, Channels, Markets, Payments, Shipments, Customers, Adjustments. Architecture and relationships only. Common phrasings include "how does X connect to Y", "what's the relationship between", "where does Spree store X", "how do I query orders across stores", "how do channels work", "what's the difference between Cart and Order", "Store vs Channel vs Market". For adding new models / new API resources, use the `spree-resource` skill. For field-level detail, see `docs/developer/core-concepts/` in the installed `@spree/docs` package.
 ---
 
 # Spree Data Model
 
-A reference map for the most-asked-about relationships. For field-level detail, read `backend/node_modules/@spree/docs/dist/developer/core-concepts/`.
+A relationship map for the most-asked-about Spree models. Field-level documentation lives in the installed `@spree/docs` package at `node_modules/@spree/docs/dist/developer/core-concepts/`.
 
 ## The catalog → cart pipeline
 
@@ -13,63 +13,72 @@ A reference map for the most-asked-about relationships. For field-level detail, 
 Product → Variant → LineItem → Order
 ```
 
-- **Product** owns brand-level info (name, slug, description, category).
-- **Variant** is the SKU — every Product has at least one Variant (the "master" variant; being eliminated in 6.0, see "Coming in 6.0" below). Variants carry SKU, price, dimensions, inventory.
-- **LineItem** links a Variant to an Order with quantity + frozen-at-add-time pricing.
-- **Order** is the customer's transaction (cart-in-progress OR completed purchase — see "Cart vs Order" below).
+- **Product** is the brand-level entity (name, slug, description, category).
+- **Variant** is the sellable SKU. Every Product has at least one Variant. Variants carry SKU, prices, dimensions, and link to inventory.
+- **LineItem** links a Variant to an Order with `quantity` and price frozen at add-time.
+- **Order** is the customer's transaction — the cart-in-progress and, after checkout, the completed transaction (same record, different `state`).
 
-Variants relate to inventory via `StockItem` (per Variant + per StockLocation) and `StockMovement` for the movement history.
+Variants relate to stock via `StockItem` (one per Variant per StockLocation) and the `StockMovement` history.
 
-## The multi-channel / multi-store axis (5.5+)
+### Master vs default variant
+
+A Product has both a `master` variant (legacy concept, `is_master: true`) and a `default_variant` (newer column on Product pointing at the chosen variant). Both APIs work in 5.5; new code should reach for `product.default_variant` and the `default_variant_id` column. Use `product.variants` for the non-master sellable variants and `product.variants_including_master` only when you genuinely need the master row included.
+
+## The multi-channel / multi-store axis
 
 ```
 Store → Channel → ProductPublication → Product
 ```
 
-This is new in 5.5. Before 5.5, products belonged directly to stores via `spree_products_stores`. Now:
+Available since Spree 5.5.
 
-- **Store** is a top-level brand entity (one organization = one Store, usually).
-- **Channel** is a sales surface within a Store (website, POS, marketplace, B2B). Every Store has at least a default Channel.
-- **ProductPublication** is the join: which Products are visible on which Channel, with `published_at` / `unpublished_at` windows.
-- **Order** has `channel_id` (which channel it came from) so you can attribute revenue per channel.
+- **Store** is the top-level brand (one organization = one Store, typically).
+- **Channel** is a selling surface within a Store: the online storefront, in-person POS, marketplace integrations (Amazon, eBay), B2B wholesale, mobile apps. Every Store has at least a default Channel named "Online Store".
+- **ProductPublication** is the join: which Products are visible on which Channel, with optional `published_at` / `unpublished_at` windows for scheduling.
+- **Order** has `channel_id` so revenue can be attributed per channel.
 
-If the user is on Spree < 5.5, the model is flatter: `Product` has `has_many :stores`. The 5.5 upgrade (`spree:channels:upgrade` rake task) migrates the data.
+The Store API resolves a channel per request from the `X-Spree-Channel` header (matched against `channels.code` or a `ch_…` prefixed ID); without it the store's default channel is used. The Admin API does not consume `X-Spree-Channel` — admin queries return data across all channels for the current store.
 
 ## Markets (regional config)
 
 ```
-Market → Country (many), Market has currency + default_locale
-Order → Market
+Market has_many :countries
+Market has_one  :currency, default_locale
+Order belongs_to :market
 ```
 
-A Market is a regional configuration — its set of countries, currency, default locale. Each Store has a default Market. Orders are placed in a Market (controls the currency the customer sees).
+A Market is a regional configuration: its set of countries, currency, and default locale. Each Store has at least one Market. Orders are placed in a Market — that's what controls the currency the customer sees and what tax rules apply.
 
-Markets replaced the older `Zone` model in 5.4. Zones may still appear in older codebases (`migrate_checkout_zones` rake task migrates them).
+For full Market documentation see `docs/developer/core-concepts/markets.mdx`.
 
 ## Cart vs Order
 
-**Currently (5.x):** Same model. `Spree::Order` is the cart while `state == 'cart'`, becomes a completed Order after `state == 'complete'`. Filter on state to distinguish.
+In Spree, `Spree::Order` is both the in-progress cart and the completed transaction. The `state` column tracks which phase: `cart`, `address`, `delivery`, `payment`, `confirm`, `complete`. Filter on state to distinguish:
 
-**Coming in 6.0:** Cart and Order will be separate models. `Spree::Cart` owns the in-progress shopping experience; `Spree::Order` is the finalized transaction. `LineItem` becomes polymorphic so it can belong to either. See `docs/plans/6.0-cart-order-split.md` in the Spree monorepo for the plan if you have the docs installed locally.
+```ruby
+Spree::Order.where(state: 'cart')      # in-progress carts
+Spree::Order.where(state: 'complete')  # finalized orders
+Spree::Order.complete                  # equivalent named scope
+```
 
-Don't write code that assumes the split has happened — query both via `state` for now.
+`Order#token` (`has_secure_token :token, length: 35`) identifies an anonymous cart across requests. Logged-in carts are owned via the `user_id` FK.
 
 ## Checkout-side models
 
 ```
 Order → Payment → PaymentMethod
 Order → Shipment → ShippingRate → ShippingMethod
-Order → Address (billing + shipping)
+Order → Address (bill_address, ship_address)
 ```
 
-- **Payment** has its own state machine (`checkout → processing → completed / failed / void`). The state is currently `state` column, becoming `status` in 6.0 (see "Coming in 6.0" below).
-- **Shipment** likewise has its own state machine. Being renamed to `Fulfillment` in 6.0.
-- **ShippingRate** is a per-Shipment offer (e.g. UPS Ground $5.99, USPS Priority $8.99). Customer picks one.
+- **Payment** has its own state machine (`checkout → processing → completed / failed / void`). Column is `state`.
+- **Shipment** has its own state machine (`pending → ready → shipped` with `canceled`). Column is `state`.
+- **ShippingRate** is a per-Shipment offer (e.g. UPS Ground $5.99, USPS Priority $8.99). The customer picks one.
 
 ## Customer / User
 
 ```
-Customer (or User, depending on Spree version)
+Spree.user_class (typically Spree::User)
   ↓
 Address (many, via spree_addresses)
 CreditCard (many)
@@ -77,22 +86,26 @@ GiftCard (many)
 StoreCredit (many)
 ```
 
-- `Spree.user_class` — never reference `Spree::User` directly. Configurable per app.
-- In 6.0, `User` becomes `Customer` (with `Staff` for admin). 5.x apps still use `User` for both.
+Use `Spree.user_class` and `Spree.admin_user_class` to reference user models — never `Spree::User` directly. Apps can swap in their own user model via configuration.
 
-## Adjustments (the polymorphic problem)
+## Adjustments (polymorphic)
 
 ```
 Adjustable (Order, LineItem, Shipment) ← Adjustment
 ```
 
-Currently, `Adjustment` is polymorphic — it sticks to any Order, LineItem, or Shipment with `adjustable_type` + `adjustable_id` + a `source` (the thing that created it: a TaxRate, Promotion, etc.).
+`Adjustment` is polymorphic — it attaches to any Order, LineItem, or Shipment via `adjustable_type` + `adjustable_id`. Each Adjustment has a `source` (the thing that created it: a TaxRate, PromotionAction, ReturnAuthorization, etc.) and built-in scopes to filter by source type:
 
-This works but makes adjustment queries painful and obscures tax vs discount vs fee. **In 6.0, this splits into `TaxLine`, `Discount`, `Fee`** — concrete models with concrete FKs. If you're writing query code against Adjustment today, expect it to need rework at 6.0.
+```ruby
+order.adjustments.tax                     # source_type: 'Spree::TaxRate'
+order.adjustments.promotion               # source_type: 'Spree::PromotionAction'
+order.adjustments.return_authorization
+order.all_adjustments                     # adjustments on order + its line_items + shipments
+```
 
 ## Prefixed IDs
 
-Every Spree model that's exposed via the v3 API has a Stripe-style prefixed ID:
+Every Spree model exposed via the v3 API has a Stripe-style prefixed ID:
 
 ```ruby
 product.prefixed_id  # => "prod_86Rf07xd4z"
@@ -100,28 +113,28 @@ order.prefixed_id    # => "or_m3Rp9wXz"
 variant.prefixed_id  # => "variant_k5nR8xLq"
 ```
 
-IDs are computed on-the-fly via Sqids from the integer PK — no database column. The prefix is declared per-class via `has_prefix_id :<prefix>` (auto-applied by the v3 `Spree::PrefixedId` concern). Conventions:
+IDs are computed from the integer PK via Sqids — no database column. The prefix is declared per-class via `has_prefix_id :<prefix>` on the model. The v3 API accepts and emits prefixed IDs everywhere; `find_by_prefix_id!` resolves them back to integer PKs.
 
-- Long form for most: `prod`, `variant`, `brand`, `category`, `customer`
-- Short form when the model is high-traffic: `or` (Order), `py` (Payment, Stripe parity), `ad` (Adjustment), `li` (LineItem)
-- Domain-specific abbreviations: `cf` (CustomField, renamed from Metafield)
+Conventions for the prefix:
 
-The v3 API accepts and emits prefixed IDs everywhere. Never expose raw integer PKs in API responses. `find_by_prefix_id!` resolves them on the inbound side.
+- Long form for most resources: `prod`, `variant`, `category`, `customer`, `channel`
+- Short form for high-traffic / payment-adjacent resources: `or` (Order), `py` (Payment, Stripe parity), `adj` (Adjustment), `li` (LineItem)
 
-## `state` vs `status` (the rename in progress)
+Never expose raw integer PKs in API responses.
 
-Some models use `state` (legacy), some use `status` (the 6.0 convention). 5.x has both depending on when the model was introduced:
+## `state` vs `status` (mixed on 5.5)
 
-- `Order.state` (renaming to `status` in 6.0)
-- `Payment.state` (renaming to `status` in 6.0)
-- `Channel.status` (always status — new)
-- `OrderApproval.state` (legacy)
+Different models use different column names depending on when they were introduced:
 
-If you're building new state machines on Spree models, use `status` not `state`. If you're querying existing 5.x state, check the model's column.
+- `Order.state`, `Payment.state`, `Shipment.state` — older state machines
+- `OrderApproval.status` — newer status column
+- `Channel` doesn't use a state machine — it has an `active` boolean instead
+
+When writing model code, follow the convention of the column the model actually has. When querying, check the model's source if you're not sure.
 
 ## `Spree::Current` (per-request context)
 
-Don't pass store / currency / locale around as arguments. Use the ambient context:
+Avoid passing store / currency / locale around as arguments. Use the ambient context:
 
 ```ruby
 Spree::Current.store      # The store handling this request
@@ -129,23 +142,10 @@ Spree::Current.currency   # The currency to display prices in
 Spree::Current.locale     # The locale for translations
 ```
 
-Available in models, controllers, jobs, services. Set automatically by request middleware on the API; you set it manually in jobs / rake tasks.
-
-## Coming in 6.0 (key shifts to be aware of)
-
-- **Cart / Order split** — separate models, polymorphic LineItem.
-- **Shipment → Fulfillment, ShippingMethod → DeliveryMethod** — terminology and model rename. ShippingCategory drops.
-- **Adjustment split** — TaxLine, Discount, Fee replace polymorphic Adjustment.
-- **User → Customer + Staff** — own auth stack, Devise drops.
-- **Returns/Exchanges/Claims** — first-class models replacing ReturnAuthorization + Reimbursement chain.
-- **state → status** — the rename completes on Payment, Shipment, InventoryUnit, ReturnAuthorization, GiftCard.
-- **`is_master` drops** — Product gets `default_variant_id` FK.
-- **TaxProvider per Market** — replaces TaxRate.adjust + Calculator.
-
-Don't write code that assumes any of these have shipped if you're on 5.x. When a question mentions a 6.0 plan, point at `docs/plans/<version>-<topic>.md` if the user has the monorepo, otherwise the upgrade docs.
+Available in models, controllers, jobs, and services. Set automatically by request middleware on the API; you set it manually in jobs and rake tasks that need to address a specific store.
 
 ## When to read further
 
-- **Field-level docs:** `backend/node_modules/@spree/docs/dist/developer/core-concepts/<model>.mdx`
-- **OpenAPI spec:** `backend/node_modules/@spree/docs/dist/api-reference/store.yaml` lists every API field and its type — better than guessing from the model class.
-- **Active plans (if monorepo present):** `docs/plans/6.0-*.md` covers each architectural shift in detail.
+- **Field-level docs:** `node_modules/@spree/docs/dist/developer/core-concepts/<topic>.mdx` for each model.
+- **OpenAPI spec:** `node_modules/@spree/docs/dist/api-reference/store.yaml` lists every API field and its type — better than guessing from the model source.
+- **Adding new models / API resources:** use the `spree-resource` skill.

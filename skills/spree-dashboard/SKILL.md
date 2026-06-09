@@ -1,11 +1,13 @@
 ---
 name: spree-dashboard
-description: Use when the user wants to extend the Spree 6.0 React admin SPA (`@spree/dashboard`) — add a new admin page, customize an existing one via slots, add a column to an admin table, register a new sidebar nav entry, or build a dashboard plugin. Specifically the React SPA replacement for the legacy Rails admin. Common phrasings include "extend the React dashboard", "defineDashboardPlugin", "customize the Spree admin SPA", "add slot to product edit", "@spree/dashboard plugin". If the user is on Spree 5.x or earlier — or on 6.0 but still running the legacy Rails admin (`spree_admin` gem) — use the spree-admin skill instead. Provides the extension points the dashboard exposes and the `defineDashboardPlugin` API.
+description: Use when the user wants to extend the Spree React admin dashboard (`@spree/dashboard`) — add a new admin page, customize an existing one via slots, add a column to an admin table, register a new sidebar nav entry, or build a dashboard plugin. Specifically the React SPA shipping alongside the legacy Rails admin. Common phrasings include "extend the React dashboard", "defineDashboardPlugin", "customize the Spree admin SPA", "add slot to product edit", "@spree/dashboard plugin", "React admin". For customizing the legacy Rails admin (`spree_admin` gem), use the spree-admin skill instead. Provides the extension points the dashboard exposes and the `defineDashboardPlugin` API.
 ---
 
-# Spree 6.0 Dashboard
+# Spree React Dashboard
 
-The 6.0 admin is `@spree/dashboard` — a React SPA built with Vite, TanStack Router, TanStack Query, shadcn/ui + Base UI. It replaces the legacy Rails admin (`spree/admin`) entirely. Most user projects won't have this checked into their backend; it runs as a Vite app that talks to the Admin API. For Spree-monorepo contributors it lives at `packages/dashboard/`.
+`@spree/dashboard` is the React single-page application that ships as Spree's modern admin. It's a Vite-built SPA using TanStack Router (file-based, type-safe), TanStack Query, React Hook Form + Zod, shadcn/ui + Base UI, Tailwind, and Biome. All data goes through `@spree/admin-sdk` against the Admin API.
+
+The dashboard is an alternative to the legacy Rails admin (`spree_admin` gem). Projects can run either; this skill is specifically about extending `@spree/dashboard`.
 
 ## The three-package split
 
@@ -17,7 +19,7 @@ The dashboard is intentionally split into three packages so plugin authors can e
 | `@spree/dashboard-core` | The extension framework — registries, providers, admin SDK client, `defineDashboardPlugin`. Plugin authors import from here. |
 | `@spree/dashboard` | The deployable app shell — routes, resource hooks, Zod schemas, locales. Customize behavior here. |
 
-If you're extending the dashboard for a single project, write your code against `@spree/dashboard-core/plugin`. If you're maintaining a published plugin, the same — the API is plugin-author-friendly by design.
+If you're extending the dashboard for a single project, write your code against `@spree/dashboard-core/plugin`. The same API works whether you're customizing for one app or publishing a reusable plugin.
 
 ## The extension API
 
@@ -67,7 +69,7 @@ defineDashboardPlugin({
 })
 ```
 
-`position` controls ordering (lower = earlier). Built-in entries occupy positions 10-90; plugins typically land at 50+. `key` must be unique across all registered nav entries.
+`position` controls ordering (lower = earlier). Built-in entries occupy positions 10–90; plugins typically land at 50+. `key` must be unique across all registered nav entries.
 
 ### 2. Slots (`slots`)
 
@@ -83,7 +85,7 @@ defineDashboardPlugin({
 })
 ```
 
-The slot component receives the page's subject as a prop (e.g. `{ product }` for product slots, `{ order }` for order slots). Each slot entry needs a unique `id`. The dashboard's source is the truth for what slots exist — search for `<Slot name="..."` to enumerate them.
+The slot component receives the page's subject as a prop (e.g. `{ product }` for product slots, `{ order }` for order slots). Each slot entry needs a unique `id`. The dashboard's source is the truth for what slots exist — search for `<Slot name="..."` in the dashboard source to enumerate them.
 
 ### 3. Table columns (`tables`)
 
@@ -122,7 +124,7 @@ defineDashboardPlugin({
 
 The lightest version: register a nav entry, register a route in your plugin's bootstrap, and the dashboard renders your component when the user clicks. For more complex pages (resource list + edit), reuse the dashboard's existing patterns:
 
-- **Table page:** Use `<ResourceTable>` from `@spree/dashboard-ui` — handles sort/filter/pagination via Admin SDK.
+- **Table page:** Use `<ResourceTable>` from `@spree/dashboard-ui` — handles sort/filter/pagination via the Admin SDK.
 - **Form page:** React Hook Form + `<Field>` / `<Input>` / `<FieldError>` primitives. Zod schema for validation.
 - **Data fetching:** TanStack Query via the resource hooks (`useResource(...)` exposed by `@spree/dashboard-core`).
 
@@ -145,12 +147,13 @@ module Spree::Api::V3::Admin::ProductSerializerDecorator
 end
 ```
 
-3. The Lefthook hook regenerates the TS type for the new field automatically on commit. In the meantime, run manually:
+3. Regenerate the TypeScript type for the new field. If a Lefthook hook is set up it runs automatically on commit; otherwise:
 
 ```bash
 spree rake typelizer:generate
-cd packages/admin-sdk && pnpm build
 ```
+
+Then rebuild the admin SDK so the dashboard sees the new type.
 
 4. Now the dashboard plugin can register the column:
 
@@ -175,12 +178,13 @@ The `key` must match the serializer attribute exactly. Sort and filter work if t
 ## What lives where
 
 - **Page-level customization for one app** — write a plugin in your project; the dashboard imports it at bootstrap.
-- **Reusable customization across multiple apps** — package it as an npm package + ship as a Spree extension that auto-registers in dev. Same `defineDashboardPlugin` API.
+- **Reusable customization across multiple apps** — package it as an npm package + ship as a Spree extension that auto-registers in development. Same `defineDashboardPlugin` API.
 - **Core dashboard behavior change** — that's not extension territory; consider whether the dashboard core needs to expose a new slot or registry. PR upstream.
 
 ## Where to read further
 
-- **Dashboard architecture:** `packages/dashboard/README.md` in the Spree monorepo covers the full picture (auth, permissions, multi-store, extension points).
-- **Plugin API source:** `packages/dashboard-core/src/plugin.ts` is the authoritative type signature for `defineDashboardPlugin`.
-- **Existing pages to study:** `packages/dashboard/src/routes/_authenticated/$storeId/` — the file-based routes are real reference implementations.
-- **Component primitives:** `packages/dashboard-ui/src/` — headless components you build pages from.
+- **The dashboard package itself:** the `@spree/dashboard` source is the authoritative reference — file-based routes under `src/routes/_authenticated/$storeId/` are real implementations you can study.
+- **Component primitives:** `@spree/dashboard-ui` source for headless components.
+- **Plugin API source:** `@spree/dashboard-core` — `defineDashboardPlugin` type signature is authoritative.
+- **Admin SDK usage:** the `spree-typescript-sdk` skill.
+- **Legacy Rails admin** (the alternative): the `spree-admin` skill.
