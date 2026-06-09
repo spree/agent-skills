@@ -149,3 +149,4 @@ Available in models, controllers, jobs, and services. Set automatically by reque
 - **Field-level docs:** `node_modules/@spree/docs/dist/developer/core-concepts/<topic>.mdx` for each model.
 - **OpenAPI spec:** `node_modules/@spree/docs/dist/api-reference/store.yaml` lists every API field and its type — better than guessing from the model source.
 - **Adding new models / API resources:** use the `spree-resource` skill.
+- **Extending existing Spree models** (add an association, validation, scope, method via decorator): use the `spree-decorators` skill.

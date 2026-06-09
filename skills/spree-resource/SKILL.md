@@ -1,6 +1,6 @@
 ---
 name: spree-resource
-description: Use when the user wants to add a new model, database table, or REST API endpoint to their Spree project. Common phrasings include "add a Brand model", "create a new resource", "expose X as an API endpoint", "add an admin API for Y", "scaffold a Spree resource". Provides the spree:api_resource generator and its flags.
+description: Use when the user wants to add a new model, database table, or REST API endpoint to their Spree project. Covers both `spree:api_resource` (full surface — model + API controllers + serializers + factory + specs + routes) and `spree:model` (model + migration only, no API). Common phrasings include "add a Brand model", "create a new resource", "expose X as an API endpoint", "add an admin API for Y", "scaffold a Spree resource", "create a Spree model without an API", "internal model".
 ---
 
 # Adding a Spree Resource
@@ -119,3 +119,52 @@ spree generate api_resource AuditLog action:string details:text --no-store
 ```bash
 spree generate api_resource Vendor name:string:uniq slug:string:uniq --paranoid --metafields
 ```
+
+## Model only — no API surface
+
+If you want a Spree model but no Store/Admin API (internal-only record, supporting model, lookup table), use the **`spree:model` generator** directly. It produces just the model file + migration with all the Spree conventions baked in — no controllers, serializers, factory, specs, or routes.
+
+```bash
+spree generate spree:model Brand name:string:uniq active:boolean
+```
+
+The `spree:model` generator is what `spree:api_resource` inherits from; running it standalone is the right choice when:
+
+- The record is internal-only (event log, audit trail, internal join table)
+- The record is exposed only through a parent's API (e.g. `BrandImage` accessed via `brand.images`, not directly)
+- You want to write controllers and serializers by hand (custom auth, non-RESTful shape)
+- You're scaffolding a model that will be associated with an existing Spree class via decorator (see the `spree-decorators` skill)
+
+### What it produces
+
+For `spree generate spree:model Brand name:string:uniq active:boolean`:
+
+```
+backend/app/models/spree/brand.rb                   (owned-once)
+backend/db/migrate/<ts>_create_spree_brands.rb      (append-only)
+```
+
+The model has:
+- `class Brand < Spree.base_class` (the swappable base lookup, not hardcoded)
+- `has_prefix_id :brand` (auto-derived from class name, override with `--id-prefix`)
+- `null: false` on every column in the migration
+- No foreign key constraints (Spree convention)
+- Uniqueness validation scoped to `spree_base_uniqueness_scope` for any `:uniq` field
+- Ransack allowlist set to the generated attributes (empty `_associations` and `_scopes` arrays for you to fill in)
+
+### Flags
+
+The `spree:model` generator accepts the same Spree-specific flags as `api_resource`:
+
+| Flag | Effect |
+|---|---|
+| `--paranoid` | Add `acts_as_paranoid` + `deleted_at` column + index |
+| `--metafields` | Include `Spree::Metafields` + `Spree::Metadata` concerns |
+| `--id-prefix=br` | Override the prefixed-ID prefix |
+| `--parent=Spree::SomeBase` | Override the parent class (default is `Spree.base_class`) |
+
+Plus everything Rails' built-in model generator accepts (column types, indexes, references, etc.).
+
+### When to upgrade to `spree:api_resource`
+
+If you later decide the model needs API access, run `spree generate api_resource Brand …` — the generator detects the existing model file and won't overwrite it. It'll generate the controllers, serializers, factory, specs, and routes around your hand-managed model.

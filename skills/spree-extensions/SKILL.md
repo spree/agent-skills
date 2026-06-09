@@ -16,7 +16,7 @@ Always prefer the least-invasive option that solves the problem:
 3. **Dependency injection (service swap)** — Replace specific behavior (cart add, tax calculation, checkout flow) by subclassing the service and registering it via `Spree.dependencies`. See the `spree-project` skill and `docs/developer/customization/dependencies.mdx`.
 4. **Install an extension (gem)** — Pull in pre-built functionality.
 5. **Build your own extension (gem)** — Functionality you want to reuse across multiple Spree apps you maintain.
-6. **Decorators** — Last resort. Tightly couples your code to Spree internals; makes upgrades harder. See `docs/developer/customization/decorators.mdx`.
+6. **Decorators** — Structural changes (add an association, validation, scope, new method) to an existing Spree model or controller via `Module#prepend`. Tightly couples to Spree internals. See the `spree-decorators` skill.
 
 Extensions are option 4 — pulling in someone else's gem. Building your own (option 5) makes sense when you have multiple Spree projects sharing customization, or when you intend to share with the community. For a single app's customization, prefer subscribers and dependency injection.
 
@@ -154,7 +154,7 @@ The most common confusion is "which customization pattern do I use." The honest 
 | Add a new admin page | Slot system + custom controller in `backend/`; extension if reusable across apps |
 | Add a payment gateway | Use an existing extension (Stripe/Adyen/PayPal) or write a new `Spree::PaymentMethod` subclass |
 | Replace search backend | Implement a SearchProvider (see `docs/developer/how-to/custom-search-provider.mdx`) |
-| Change an internal model's structural behavior | Decorator (last resort) |
+| Add an association, validation, scope, or method to an existing Spree model | Decorator (see `spree-decorators` skill) |
 
 If the customization is **specific to one app's business**, don't build an extension — it's overhead. If it's **reusable across multiple apps** or **a feature the wider Spree community would benefit from**, an extension is the right shape.
 

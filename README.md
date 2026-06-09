@@ -30,12 +30,13 @@ npx skills update
 
 ## What ships
 
-### 23 skills
+### 24 skills
 
 | Skill | When it activates |
 |---|---|
 | `spree-project` | General Spree project context — conventions, customization patterns, common commands. |
 | `spree-resource` | Adding a new model + API endpoint via the `spree:api_resource` generator. |
+| `spree-decorators` | Extending existing Spree models/controllers via decorators (`Module#prepend`). |
 | `spree-api-v3` | Spree REST API v3 conventions — Store vs Admin surfaces, auth (pk_/sk_/JWT), scopes, prefixed IDs, envelope, Ransack filters. |
 | `spree-legacy-api-v2` | Maintaining or migrating away from the legacy API v2 (JSON:API style). |
 | `spree-typescript-sdk` | `@spree/sdk` + `@spree/admin-sdk` — auth modes, types, Zod, webhooks, retry config, MSW, extension patterns. |
