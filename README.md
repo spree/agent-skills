@@ -30,11 +30,12 @@ npx skills update
 
 ## What ships
 
-### 24 skills
+### 25 skills
 
 | Skill | When it activates |
 |---|---|
 | `spree-project` | General Spree project context — conventions, customization patterns, common commands. |
+| `spree-customization` | Decision tree for "where does my customization belong" — routes to the right specific skill. Use FIRST when the pattern isn't obvious. |
 | `spree-resource` | Adding a new model + API endpoint via the `spree:api_resource` generator. |
 | `spree-decorators` | Extending existing Spree models/controllers via decorators (`Module#prepend`). |
 | `spree-api-v3` | Spree REST API v3 conventions — Store vs Admin surfaces, auth (pk_/sk_/JWT), scopes, prefixed IDs, envelope, Ransack filters. |

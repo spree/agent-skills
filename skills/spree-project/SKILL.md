@@ -32,101 +32,21 @@ node_modules/@spree/docs/dist/
 
 Reach for these before guessing from training data. The local docs are the authoritative source for the installed Spree version.
 
-## Customization patterns (in priority order)
+## Customization patterns
 
-When extending Spree, follow this decision tree. Each layer is more invasive than the last — prefer the earliest option that solves the problem.
+90% of work on a Spree project is customization: wiring in external services, adding custom models, tweaking behavior. Spree exposes a layered set of extension points for this — settings, configuration, events, dependency injection, admin extension APIs, the resource generator, decorators, gems. Picking the right one matters because each layer has different upgrade-safety characteristics.
 
-### 1. Events + subscribers (preferred for side effects)
+**For routing a specific customization to the right pattern, use the `spree-customization` skill.** It has the full decision table (subscribers vs decorators vs `Spree.dependencies` vs admin APIs vs `Spree.ransack`) with worked examples. Reach for it whenever the right approach isn't obvious.
 
-React to model lifecycle events without touching Spree source. Use for: external service syncs, notifications, cache invalidation, custom analytics.
+Quick summary of the priority order:
 
-```ruby
-# backend/app/subscribers/spree/my_order_subscriber.rb
-module MyApp
-  class OrderSubscriber < Spree::Subscriber
-    subscribes_to 'order.complete'
-
-    def handle(event)
-      order = Spree::Order.find_by_prefix_id(event.payload['id'])
-      ExternalService.notify(order)
-    end
-  end
-end
-```
-
-Register in `backend/config/initializers/spree.rb`:
-
-```ruby
-Rails.application.config.after_initialize do
-  Spree.subscribers << MyApp::OrderSubscriber
-end
-```
-
-### 2. Swap a service (dependencies)
-
-When you need to change *behavior* of a specific operation (e.g. how items are added to the cart), subclass the Spree service and register it.
-
-```ruby
-# backend/app/services/my_app/cart/add_item.rb
-module MyApp
-  module Cart
-    class AddItem < Spree::Cart::AddItem
-      def call(order:, variant:, quantity: nil, **opts)
-        ApplicationRecord.transaction do
-          run :add_to_line_item
-          run :my_custom_step
-          run Spree.cart_recalculate_service
-        end
-      end
-
-      def my_custom_step
-        # ...
-      end
-    end
-  end
-end
-```
-
-```ruby
-# backend/config/initializers/spree.rb
-Spree.dependencies do |deps|
-  deps.cart_add_item_service = 'MyApp::Cart::AddItem'
-end
-```
-
-### 3. Install a Spree extension (gem)
-
-For larger feature additions (payment gateways, search providers, integrations):
-
-```ruby
-# backend/Gemfile
-gem 'spree_stripe'
-```
-
-```bash
-spree bundle install
-spree rails g spree_stripe:install   # convention: <gem>:install
-```
-
-### 4. Decorator (last resort)
-
-Only use for structural model changes (associations, validations, scopes). **Avoid for callbacks and side effects** — those belong in subscribers.
-
-```ruby
-# backend/app/models/spree/product_decorator.rb
-module Spree
-  module ProductDecorator
-    def self.prepended(base)
-      base.has_many :reviews, class_name: 'MyApp::Review', dependent: :destroy
-      base.validates :custom_field, presence: true
-    end
-  end
-
-  Product.prepend ProductDecorator
-end
-```
-
-Decorators couple your code to Spree internals and make upgrades harder. Prefer subscribers or service swaps when possible.
+1. **Settings / `Spree::Config`** — for runtime behavior toggles.
+2. **Events + subscribers** — for side effects ("sync to ERP when order completes").
+3. **Dependency injection** (`Spree.dependencies`) — for swapping how a core service computes.
+4. **Admin extension APIs** (`Spree.admin.navigation`, `Spree.admin.partials`, `Spree.admin.tables`, `Spree.ransack`) — for admin UI and search.
+5. **Generators** (`spree:api_resource`, `spree:model`) — for brand-new models / resources.
+6. **Decorators** (`spree:model_decorator`, `spree:controller_decorator`) — for structural changes to existing Spree classes.
+7. **Extensions** (gems) — only when sharing customization across multiple apps.
 
 ## Conventions you should always follow
 
@@ -160,6 +80,8 @@ If you don't have `spree` on your PATH, prefix with the package runner: `npx spr
 
 ## When in doubt
 
+- Not sure which customization pattern fits? See the `spree-customization` skill — it routes the decision.
 - Need to add a new model + API endpoint? See the `spree-resource` skill.
+- Need to extend an existing Spree model/controller? See the `spree-decorators` skill.
 - Need to upgrade Spree? See the `spree-upgrade` skill.
 - Need details on a specific Spree concept? Read `node_modules/@spree/docs/dist/developer/` first.

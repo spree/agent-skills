@@ -1,24 +1,13 @@
 ---
 name: spree-extensions
-description: Use when the user wants to add Spree functionality via a third-party gem (Stripe, Adyen, PayPal, i18n, search, social login, etc.), build their own Spree extension, or decide between extension vs subscriber vs decorator vs dependency injection for a customization. Common phrasings include "add Stripe", "install spree_X", "what payment gateways", "create a Spree extension", "build a gem for Spree", "decorator vs extension". Provides the install convention, the customization decision tree, and the catalog of community extensions documented at `docs/developer/customization/extensions.mdx`.
+description: Use when the user wants to install a specific third-party Spree gem (Stripe, Adyen, PayPal, i18n, search, social login, etc.), build their own Spree extension to share across apps, or swap a core Spree service via `Spree.dependencies`. Common phrasings include "add Stripe", "install spree_X", "what payment gateways", "create a Spree extension", "build a gem for Spree", "spree_dev_tools", "Spree.dependencies", "service swap". For deciding which customization pattern to use, see the `spree-customization` skill first — extensions are option 4 on a 6-option decision tree and most single-app work doesn't need one.
 ---
 
 # Spree Extensions
 
+This skill covers two distinct things: **installing a third-party Spree gem** (`spree_stripe`, `spree_i18n`, etc.) and **building your own extension** to share across multiple Spree apps. For single-app customization (the 99% case), use the `spree-customization` skill to find the right pattern — usually it's a subscriber, dependency injection, or a decorator, not a gem.
+
 Spree extensions are Rails engines packaged as gems. They mount into the host Rails app the same way Spree itself does. Adding one is a Gemfile entry + a generator run + a migrate.
-
-## The customization decision tree
-
-Always prefer the least-invasive option that solves the problem:
-
-1. **Configuration / preferences** — A lot of behavior is just config. Check `Spree::Config[:my_key]` and the admin Settings UI first. See `docs/developer/customization/configuration.mdx`.
-2. **Events + subscribers** — Side effects that react to lifecycle events. See the `spree-events-webhooks` skill.
-3. **Dependency injection (service swap)** — Replace specific behavior (cart add, tax calculation, checkout flow) by subclassing the service and registering it via `Spree.dependencies`. See the `spree-project` skill and `docs/developer/customization/dependencies.mdx`.
-4. **Install an extension (gem)** — Pull in pre-built functionality.
-5. **Build your own extension (gem)** — Functionality you want to reuse across multiple Spree apps you maintain.
-6. **Decorators** — Structural changes (add an association, validation, scope, new method) to an existing Spree model or controller via `Module#prepend`. Tightly couples to Spree internals. See the `spree-decorators` skill.
-
-Extensions are option 4 — pulling in someone else's gem. Building your own (option 5) makes sense when you have multiple Spree projects sharing customization, or when you intend to share with the community. For a single app's customization, prefer subscribers and dependency injection.
 
 ## Installing an extension
 
@@ -142,21 +131,61 @@ end
 
 For the full tutorial — decorators, controller extensions, model decorators, route additions, testing — see `docs/developer/contributing/creating-an-extension.mdx`.
 
-## Decision: extension vs subscriber vs decorator vs dependency injection
+## Swapping a core service via `Spree.dependencies`
 
-The most common confusion is "which customization pattern do I use." The honest distinction:
+Often the right answer is "I want my own version of an existing Spree service" — replace how the cart adds items, how the order recalculates, how tax computes, etc. That's dependency injection, NOT an extension. The mechanism lives in `Spree.dependencies`:
 
-| Want to... | Use |
-|---|---|
-| React to a lifecycle event (sync, notify, log) | Subscriber in `backend/app/subscribers/` |
-| Replace how a cart calculates / how checkout transitions / how stock allocates | Dependency injection via `Spree.dependencies` |
-| Add a custom field to an existing model | `Spree::Metafields` (configuration, not extension) — see `docs/developer/core-concepts/metafields.mdx` |
-| Add a new admin page | Slot system + custom controller in `backend/`; extension if reusable across apps |
-| Add a payment gateway | Use an existing extension (Stripe/Adyen/PayPal) or write a new `Spree::PaymentMethod` subclass |
-| Replace search backend | Implement a SearchProvider (see `docs/developer/how-to/custom-search-provider.mdx`) |
-| Add an association, validation, scope, or method to an existing Spree model | Decorator (see `spree-decorators` skill) |
+```ruby
+# config/initializers/spree.rb
+Spree.dependencies do |deps|
+  deps.cart_add_item_service    = 'MyApp::Cart::AddItem'
+  deps.cart_recalculate_service = 'MyApp::Cart::Recalculate'
+  deps.cart_remove_item_service = 'MyApp::Cart::RemoveItem'
+end
+```
 
-If the customization is **specific to one app's business**, don't build an extension — it's overhead. If it's **reusable across multiple apps** or **a feature the wider Spree community would benefit from**, an extension is the right shape.
+Or assign single values directly:
+
+```ruby
+Spree.cart_add_item_service = 'MyApp::Cart::AddItem'
+```
+
+Your replacement class subclasses the Spree default and overrides the steps you want to change:
+
+```ruby
+# app/services/my_app/cart/add_item.rb
+module MyApp
+  module Cart
+    class AddItem < Spree::Cart::AddItem
+      def call(order:, variant:, quantity: nil, metadata: {}, options: {})
+        ApplicationRecord.transaction do
+          run :add_to_line_item
+          run :handle_stock_reservations   # keep parent's stock step
+          run :my_custom_step              # your custom logic
+          run Spree.cart_recalculate_service
+        end
+      end
+
+      def my_custom_step(order:, variant:, **)
+        # ...
+      end
+    end
+  end
+end
+```
+
+Swappable services include: cart add/remove/update/recalculate, order updater, checkout state machine, tax calculator, payment processor, search provider, line item finder, ability classes, every API v3 serializer. The full list lives in `spree_core/lib/spree/core.rb` (search for `def self.<x>_service` and `cattr_accessor`).
+
+When to use dependency injection vs a decorator: **if Spree gives you a swappable service, use it.** Decorators on `Spree::Cart::AddItem` would couple to the parent's internal step names and break on upgrades; subclassing + injection is the supported extension point.
+
+## When an extension is and isn't the right shape
+
+Extensions are the wrong tool for most single-app customization. They make sense when:
+
+- You maintain **multiple Spree apps** and want to share customization between them.
+- You're building **something the Spree community would benefit from** (an open-source gem).
+
+For one app: put the code directly in `app/` (subscribers, decorators, services, controllers). No extension overhead. See the `spree-customization` skill for the full routing table; this skill picks up at "yes, I really want a gem."
 
 ## Common gotchas with extensions
 

@@ -2,7 +2,7 @@
 
 This file follows the [agents.md](https://agents.md) cross-tool standard. It's a portable summary of how to be effective on a Spree Commerce codebase, written for any agentic CLI (Codex, Cursor, Copilot, Aider, Windsurf, Zed, Amp, etc.) that reads `AGENTS.md`.
 
-If you're running in **Claude Code**, install this package as a plugin and you'll get the 24 SKILL.md files under `skills/` as on-demand context, the `spree-expert` subagent, and two safety hooks. See [README.md](./README.md) for install instructions.
+If you're running in **Claude Code**, install this package as a plugin and you'll get the 25 SKILL.md files under `skills/` as on-demand context, the `spree-expert` subagent, and two safety hooks. See [README.md](./README.md) for install instructions.
 
 If you're running in **any other tool**: read this file, then dive into the relevant `skills/<name>/SKILL.md` when the task matches its domain.
 
@@ -118,6 +118,7 @@ When the task domain matches one of these, read the corresponding `skills/<name>
 | Domain | Skill |
 |---|---|
 | General project conventions, customization patterns | `spree-project` |
+| Routing question: "where does my customization belong" / "decorator vs subscriber vs ..." | `spree-customization` |
 | Adding a new model + API endpoint (uses the `spree:api_resource` generator) | `spree-resource` |
 | Extending an existing Spree model/controller via decorators (`prepend`) | `spree-decorators` |
 | REST API v3 protocol — auth, envelopes, prefixed IDs, scopes | `spree-api-v3` |
