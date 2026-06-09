@@ -1,0 +1,250 @@
+---
+name: spree-deployment
+description: Use when the user is deploying a Spree application to production — Heroku, Render, Fly, AWS, K8s, plain Docker. Covers required environment variables, Sidekiq setup, the release-phase command (`rake spree:upgrade`), ActiveStorage backend config, asset precompile, the docker-entrypoint behavior. Common phrasings include "deploy Spree", "Heroku deploy", "Render deploy", "Spree on Kubernetes", "Spree environment variables", "Spree release command", "Procfile", "Sidekiq deployment", "S3 setup", "Cloudflare R2", "asset precompile failed". Spree-specific bits only — generic Rails deployment is out of scope.
+---
+
+# Deploying Spree
+
+Spree is a standard Rails 7+ application — most generic Rails deployment guides apply. This skill covers the Spree-specific pieces: the env vars Spree expects, the Sidekiq queue setup, the upgrade release command, and the ActiveStorage backends Spree integrates with.
+
+## Required environment variables
+
+These must be set on every Spree deployment:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `SECRET_KEY_BASE` | Yes | 128-char hex. Generate with `bin/rails secret`. Must be stable across restarts (cookies, sessions, encrypted preferences depend on it). |
+| `DATABASE_URL` | Yes | PostgreSQL connection URL. `postgres://user:pass@host:5432/spree_production`. |
+| `REDIS_URL` | Yes | Used for caching, Sidekiq, ActionCable. `redis://host:6379/0`. |
+| `RAILS_ENV` | Yes | `production` for production. Don't deploy `development`. |
+| `RAILS_LOG_TO_STDOUT` | Recommended | Most cloud platforms aggregate from stdout — set to any truthy value. |
+| `RAILS_SERVE_STATIC_FILES` | Conditional | Set when not behind a reverse proxy serving `/public`. Heroku/Render handle this; bare-metal may not. |
+| `PORT` | Conditional | Web server port. Platform-dependent — Heroku/Render inject; K8s expects container's. |
+
+### Optional but common
+
+| Variable | Notes |
+|---|---|
+| `REDIS_CACHE_URL` | Separate Redis DB for `Rails.cache`. Falls back to `REDIS_URL`. Use a separate instance in production so cache evictions don't hit Sidekiq. |
+| `RAILS_MAX_THREADS` | Puma threads per worker. Default 5; tune based on DB pool size. |
+| `WEB_CONCURRENCY` | Puma worker count. Default 1; increase for multi-core. |
+| `RAILS_FORCE_SSL` | Force HTTPS at the Rails layer. Most platforms terminate SSL at the LB instead — leave false there. |
+| `RAILS_HOST` | The public hostname. Used in email links and absolute URLs. |
+
+### Email (SMTP)
+
+| Variable | Notes |
+|---|---|
+| `SMTP_HOST` | When set, enables SMTP delivery. Otherwise emails are logged. |
+| `SMTP_PORT` | Typically 587 (STARTTLS) or 465 (TLS). |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | Provider credentials. |
+| `SMTP_FROM_ADDRESS` | Default sender. |
+| `SMTP_AUTHENTICATION` | Usually `plain`. Provider-specific. |
+
+If `SMTP_HOST` is unset, ActionMailer uses the `letter_opener_web` gem in dev (saves emails to disk) and logs them in production. Many merchants use Postmark / SendGrid / Resend — set the SMTP vars and you're done.
+
+### File storage (ActiveStorage)
+
+Spree's product images, customer uploads, and admin assets go through ActiveStorage. Configure one of:
+
+| Backend | Variables | Notes |
+|---|---|---|
+| Local disk | (none) | Default. Doesn't work on ephemeral filesystems (Heroku, K8s without persistent volumes) — files vanish on dyno restart. |
+| AWS S3 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_BUCKET` | Auto-detected. Spree's storage.yml has an :amazon service that activates when these are set. |
+| Cloudflare R2 | `CLOUDFLARE_ENDPOINT`, `CLOUDFLARE_ACCESS_KEY_ID`, `CLOUDFLARE_SECRET_ACCESS_KEY`, `CLOUDFLARE_BUCKET` | S3-compatible. Cheaper egress; same API. |
+| GCS / Azure | Standard ActiveStorage config | Spree doesn't ship special integration; use ActiveStorage's standard configuration in `config/storage.yml`. |
+
+For production, always use an object store — local disk on ephemeral platforms loses files on restart.
+
+### Search
+
+| Variable | Notes |
+|---|---|
+| `MEILISEARCH_URL` | When set, Spree uses Meilisearch as the search provider. `http://meilisearch:7700` for a co-located instance; or a managed URL. |
+| `MEILISEARCH_API_KEY` | The master or per-index key. Required for production Meilisearch. |
+
+If `MEILISEARCH_URL` is unset, Spree uses the Database search provider — fine for catalogs < 10K products.
+
+### Error tracking
+
+| Variable | Notes |
+|---|---|
+| `SENTRY_DSN` | Spree ships Sentry integration. When set, exceptions report to Sentry automatically. |
+
+## The Sidekiq deployment
+
+Spree relies heavily on Sidekiq for background work. Required for production — without it, events don't fire, images don't process, search doesn't reindex.
+
+### Process types (Procfile pattern)
+
+```
+# Procfile
+web: bundle exec puma -C config/puma.rb
+worker: bundle exec sidekiq -C config/sidekiq.yml
+```
+
+Run at least one worker process. For high-traffic stores, run multiple worker processes with explicit queue weights.
+
+### Queue weights matter
+
+See the `spree-performance` skill for the full discussion. Minimum production-grade setup:
+
+```yaml
+# config/sidekiq.yml
+:queues:
+  - [payment_webhooks, 5]
+  - [events, 4]
+  - [default, 3]
+  - [search, 2]
+  - [images, 1]
+```
+
+Payment webhooks block the customer (they're waiting for the redirect-back); image processing is fine to lag. Without weights, image jobs flood and delay payment events.
+
+### Sidekiq Pro / Enterprise
+
+Not required, but if your store needs cron scheduling (for `spree:price_history:prune`, `spree:upgrade`, etc.), use Sidekiq-Cron (free) or Sidekiq Enterprise's built-in scheduling.
+
+## The release-phase command
+
+After every deploy, run database migrations AND the upgrade rake task. On Heroku:
+
+```
+# Procfile
+release: bundle exec rake db:migrate spree:install:migrations && bundle exec rake spree:upgrade
+```
+
+On Render:
+
+```yaml
+# render.yaml
+services:
+  - type: web
+    name: spree-web
+    autoDeploy: true
+    preDeployCommand: bundle exec rake db:migrate spree:install:migrations && bundle exec rake spree:upgrade
+```
+
+On K8s, use an init container or a Helm post-install hook:
+
+```yaml
+initContainers:
+  - name: migrate
+    image: my-spree-image:latest
+    command: ["bin/sh", "-c", "bundle exec rake db:migrate spree:install:migrations && bundle exec rake spree:upgrade"]
+```
+
+`spree:upgrade` walks every eligible upgrade manifest for the installed Spree version. It's **idempotent** — re-running on an already-upgraded app is a safe no-op. See the `spree-upgrade` skill.
+
+**Why both `db:migrate` and `spree:install:migrations`:** `spree:install:migrations` copies new migrations from the gems into `db/migrate/`. Then `db:migrate` applies them. The order matters.
+
+## Asset precompile
+
+Spree includes admin assets (Tailwind CSS, Stimulus controllers). They precompile via `bin/rails assets:precompile`. On most platforms this happens automatically at build time.
+
+### Two common precompile failures
+
+1. **`SECRET_KEY_BASE` not set at build time.** Even though precompile doesn't *need* the secret, the Rails app initializer reads it. Workaround: use `SECRET_KEY_BASE_DUMMY=1` at build time (Rails 7+ skips the secret check). The Spree Dockerfile already does this.
+
+2. **JS bundle fails on Tailwind.** The `spree_admin` gem ships its own Tailwind config. If your app has its own Tailwind setup, the two can conflict. Run `bundle exec rake spree:admin:tailwindcss:build` separately for the admin's CSS.
+
+## The bin/docker-entrypoint convention
+
+The spree-starter Dockerfile uses a tiny entrypoint:
+
+```bash
+#!/bin/bash -e
+# If running the rails server then create or migrate existing database
+if [[ "$*" == *"./bin/rails server"* ]]; then
+  ./bin/rails db:prepare
+fi
+exec "${@}"
+```
+
+`db:prepare` is `db:create` (idempotent) + `db:migrate` + `db:seed-if-empty`. For production, **this is wrong** — you want migrations to run before the server starts, but not from the entrypoint (which races multiple replicas). Override the entrypoint in production:
+
+```dockerfile
+ENTRYPOINT []
+CMD ["bundle", "exec", "puma", "-C", "config/puma.rb"]
+```
+
+And run migrations via the release-phase command above.
+
+## Platform-specific notes
+
+### Heroku
+
+- Use Heroku Postgres (the addon, not external) for `DATABASE_URL` — it injects automatically.
+- Heroku Redis or Upstash Redis works for `REDIS_URL`.
+- File storage **must** be S3 / R2 — Heroku's filesystem is ephemeral.
+- One web dyno + one worker dyno is the minimum. Hobby tier works for staging.
+- Set the release-phase command in the Procfile.
+
+### Render
+
+- Native PostgreSQL + Redis addons inject the URLs.
+- Persistent disks are available for ActiveStorage local backend (cheaper than S3 for low-traffic stores) — but only on Render's paid tier.
+- Set `preDeployCommand` in render.yaml.
+
+### Fly.io
+
+- The Fly Postgres + Upstash Redis combo is common.
+- ActiveStorage with Tigris (S3-compatible, edge-served) is the native choice.
+- Use `release_command` in fly.toml.
+
+### Kubernetes
+
+- One Deployment per process type (web, worker, optionally separate workers per queue).
+- Init container for migrations + upgrades.
+- ConfigMap for non-secret env, Secret for `SECRET_KEY_BASE`, `DATABASE_URL`, `REDIS_URL`, S3 creds.
+- HorizontalPodAutoscaler on the web Deployment based on CPU + request count.
+- Liveness probe at `/up` (Rails built-in health endpoint, returns 200 when Rails booted).
+- Readiness probe checks DB connectivity — point at a custom endpoint that does `ActiveRecord::Base.connection.active?` or use `/up` (Spree adds DB check there in 5.4+).
+
+### Plain Docker (single host)
+
+- `docker-compose.yml` with web + worker + postgres + redis + meilisearch.
+- Spree-starter ships a working example — clone it as a starting point.
+- Use a reverse proxy (Nginx, Caddy, Traefik) for SSL termination.
+
+## Common deployment problems
+
+### "Site loads but admin shows 'Spree is not configured'"
+
+You don't have a Store record. Run `bin/rails db:seed` or create one manually:
+```ruby
+Spree::Store.create!(name: 'My Store', url: ENV['RAILS_HOST'], code: 'my-store', default_currency: 'USD', default: true)
+```
+
+### "Sidekiq dashboard returns 401"
+
+The dashboard at `/sidekiq` is auth-protected by default. Configure access in `backend/config/routes.rb`:
+```ruby
+authenticate :spree_admin_user do
+  mount Sidekiq::Web => '/sidekiq'
+end
+```
+
+### "Image uploads work but images don't display"
+
+S3 bucket policy isn't allowing public reads, OR the bucket is configured as `private` and ActiveStorage isn't signing URLs. Check:
+```ruby
+Rails.application.config.active_storage.service     # should be :amazon (or your service)
+ActiveStorage::Blob.first.url                       # should return a signed URL or public URL
+```
+
+### "Webhooks aren't firing"
+
+Sidekiq worker isn't running, OR the `events` queue isn't in the worker's queue list. Confirm with `Sidekiq.redis { |r| r.lrange('queue:events', 0, -1) }`.
+
+### "Search returns nothing after deploy"
+
+Meilisearch index wasn't built. Run `bundle exec rake spree:search:reindex`. On Heroku, run as a one-off: `heroku run bundle exec rake spree:search:reindex`.
+
+## Where to read further
+
+- **Spree-starter Dockerfile + docker-compose:** github.com/spree/spree-starter — reference production-ready Docker setup.
+- **Deployment docs:** `https://spreecommerce.org/docs/developer/deployment` — platform-specific guides.
+- **Env vars:** `backend/.env.example` — the full list with comments.
+- **Sidekiq tuning:** the `spree-performance` skill.
+- **Spree upgrades in production:** the `spree-upgrade` skill — release-phase command pattern.
