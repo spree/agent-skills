@@ -45,11 +45,13 @@ Rails autoloads the file at boot; the `prepend` line runs once and your module e
 
 ## Generate the file
 
-Spree ships a generator for model decorators. **Use it** — it produces the exact filename, module, and `prepend` line the autoloader expects.
+Spree ships two generators — one for models, one for controllers. **Use them** — they produce the exact filenames, modules, and `prepend` lines the autoloader expects.
+
+### Models
 
 ```bash
 spree generate spree:model_decorator Spree::Product
-# or, without the spree CLI:
+# or, without the @spree/cli wrapper:
 bin/rails g spree:model_decorator Spree::Product
 ```
 
@@ -69,9 +71,37 @@ end
 Spree::Product.prepend Spree::ProductDecorator
 ```
 
-The argument accepts either `Spree::Product` or `Product` — the generator strips the prefix. Works for any model in `Spree::*`.
+The argument accepts either `Spree::Product` or `Product` — the generator strips the prefix. Works for any model in the `Spree::*` namespace.
 
-> There is no `spree:controller_decorator` generator. For controllers, write the file by hand at `app/controllers/spree/<name>_controller_decorator.rb` following the same pattern.
+### Controllers
+
+```bash
+spree generate spree:controller_decorator Spree::Admin::ProductsController
+```
+
+Output at `app/controllers/spree/admin/products_controller_decorator.rb`:
+
+```ruby
+module Spree::Admin
+  module ProductsControllerDecorator
+    def self.prepended(base)
+      # base.before_action :my_filter
+    end
+
+    # add custom methods here
+  end
+end
+
+Spree::Admin::ProductsController.prepend Spree::Admin::ProductsControllerDecorator
+```
+
+The generator handles arbitrary namespace depth:
+
+- `Spree::ProductsController` → `app/controllers/spree/products_controller_decorator.rb`
+- `Spree::Admin::ProductsController` → `app/controllers/spree/admin/products_controller_decorator.rb`
+- `Spree::Api::V3::Store::ProductsController` → `app/controllers/spree/api/v3/store/products_controller_decorator.rb`
+
+The final `.prepend` line is always fully qualified — no surprises about which constant is being decorated.
 
 ## Model decorator patterns
 
