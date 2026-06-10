@@ -5,6 +5,8 @@ description: Use when the user is customizing the legacy Rails admin (the `spree
 
 # Spree Legacy Rails Admin (`spree_admin`)
 
+> Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
+
 The legacy admin is a Rails engine — server-rendered ERB views, Stimulus + Turbo for interactivity, Tailwind for styling. It's the long-standing admin and remains a fully-supported option alongside the React `@spree/dashboard`.
 
 If you're working on the React dashboard instead, see the **spree-dashboard** skill. This skill is specifically the `spree_admin` gem's Rails admin.
@@ -23,8 +25,8 @@ spree_admin gem
 │   ├── javascript/spree/admin/          # Stimulus controllers, importmap-managed
 │   └── models/spree/admin/navigation*   # nav + nav builder
 └── lib/generators/spree/admin/
-    ├── install/                         # bin/rails g spree_admin:install
-    └── scaffold/                        # bin/rails g spree_admin:scaffold
+    ├── install/                         # bin/rails g spree:admin:install
+    └── scaffold/                        # bin/rails g spree:admin:scaffold
 ```
 
 In a host app (`backend/`), you customize by overriding files at the same paths under `backend/app/`. Rails view path resolution prefers the host app's files over the gem's.
@@ -34,7 +36,7 @@ In a host app (`backend/`), you customize by overriding files at the same paths 
 Spree ships an admin scaffold generator that produces the full CRUD admin for any model. After the model + migration exist (use `spree:api_resource` or `spree:model`):
 
 ```bash
-spree rails g spree_admin:scaffold Spree::Brand
+spree rails g spree:admin:scaffold Spree::Brand
 ```
 
 This emits:
@@ -48,21 +50,24 @@ This emits:
 | `backend/app/views/spree/admin/brands/_form.html.erb` | Shared form partial |
 | `backend/config/initializers/spree_admin_brands_table.rb` | Table column registration |
 | `backend/config/initializers/spree_admin_brands_navigation.rb` | Sidebar nav registration |
+| `backend/config/routes.rb` | `namespace :admin { resources :brands }` injected into the `add_routes` block |
 
-You'll also need to add routes — the generator currently doesn't inject them:
+The generator also injects routes into `backend/config/routes.rb`, inside the `Spree::Core::Engine.add_routes do` block (present in the spree-starter template). If your routes.rb lacks that block, add the routes manually:
 
 ```ruby
 # backend/config/routes.rb
 Rails.application.routes.draw do
-  mount Spree::Core::Engine => '/'
-
-  Spree::Core::Engine.routes.append do
+  Spree::Core::Engine.add_routes do
     namespace :admin do
       resources :brands
     end
   end
+
+  mount Spree::Core::Engine, at: '/'
 end
 ```
+
+`add_routes` (not raw `Spree::Core::Engine.routes.append`) is the supported mechanism — it guards against routes being drawn twice when the app reloads.
 
 (If you're using `spree:api_resource` for the API, the routes for the API are separate from the admin routes — they live in different namespaces.)
 
@@ -82,7 +87,7 @@ Rails.application.config.after_initialize do
   Spree.admin.navigation.sidebar.add :brands,
     label: :brands,                                       # i18n key or string
     url: :admin_brands_path,                              # symbol → route helper, or string
-    icon: 'list',                                         # lucide-react icon name
+    icon: 'list',                                         # Tabler icon name (https://tabler.io/icons)
     position: 55,                                         # lower = earlier in sidebar
     active: -> { controller_name == 'brands' },           # when to highlight
     if: -> { can?(:manage, Spree::Brand) }                # CanCanCan visibility check
@@ -109,7 +114,7 @@ The full nav API is in `spree/admin/app/models/spree/admin/navigation.rb` if you
 
 ## Customizing admin tables
 
-Every admin listing page (Products, Orders, Customers, etc.) uses a registered table definition. Add, remove, or reorder columns from an initializer:
+Most admin listing pages (Products, Orders, Promotions, etc.) use a registered table definition — see the gem's `config/initializers/spree_admin_tables.rb` for the registered keys (note: the Customers page is registered as `:users`; a few pages like Payment Methods don't use the table registry). Add, remove, or reorder columns from an initializer:
 
 ```ruby
 # backend/config/initializers/spree_admin_products_table_customization.rb
@@ -117,7 +122,7 @@ Rails.application.config.after_initialize do
   # Add a column to the existing Products table
   Spree.admin.tables.products.add :brand_name,
     label: :brand,                                        # i18n key
-    type: :text,                                          # :text | :link | :datetime | :badge | :image | :money | :boolean
+    type: :string,                                        # :string | :number | :date | :datetime | :money | :status | :link | :boolean | :image | :custom | :association
     sortable: true,
     filterable: true,
     default: true,                                        # visible by default (vs opt-in via column toggle)
@@ -131,9 +136,9 @@ Rails.application.config.after_initialize do
 end
 ```
 
-For tables you generate yourself (via `spree_admin:scaffold`), the initializer is emitted with sensible defaults — `name`, `created_at`, `updated_at`. Add your domain-specific columns there.
+For tables you generate yourself (via `spree:admin:scaffold`), the initializer is emitted with sensible defaults — `name`, `created_at`, `updated_at`. Add your domain-specific columns there.
 
-Custom column rendering: when a column's value isn't a direct attribute, define a method on the model or a presenter/decorator. The column's `name` references that method. For example, if you add a `brand_name` column to the Products table, define `brand_name` on the Product model or a presenter:
+Custom column rendering: when a column's value isn't a direct attribute, define a method on the model or a presenter/decorator. The column's key (the first argument to `add`) is used as the lookup method by default; pass `method:` to point at a different method name or a lambda that receives the record. For example, if you add a `brand_name` column to the Products table, define `brand_name` on the Product model or a presenter:
 
 ```ruby
 # In your model or decorator
@@ -152,16 +157,19 @@ Two real gotchas:
 
 2. **View files have a `data-controller` Stimulus binding** for interactive behavior. If you delete a `data-controller="…"` attribute, the related JS stops working. Keep the bindings unless you're explicitly replacing them.
 
-For lighter overrides, prefer extending via partials Spree exposes — many views `<%= render 'spree/admin/shared/extra_actions' %>` at known points. Override just the partial:
+For lighter overrides, use the admin's named injection points instead of overriding whole views. Views render registered partial lists (e.g. `head`, `body_end`, `products_header`, `product_form`) via `render_admin_partials`. Create your partial (e.g. `backend/app/views/spree/admin/shared/_my_banner.html.erb`) and register it in an initializer:
 
-```erb
-<!-- backend/app/views/spree/admin/shared/_extra_actions.html.erb -->
-<%= link_to 'My custom action', some_path, class: 'btn btn-primary' %>
+```ruby
+Rails.application.config.after_initialize do
+  Spree.admin.partials.body_end << 'spree/admin/shared/my_banner'
+end
 ```
+
+List all injection points with `Spree.admin.partials.keys` in a console.
 
 ## Decorating admin controllers
 
-The Spree admin controllers are normal Rails controllers — you can decorate them like any other:
+The Spree admin controllers are normal Rails controllers — you can decorate them like any other. Scaffold the file with `spree generate controller_decorator Spree::Admin::ProductsController` — it emits `backend/app/controllers/spree/admin/products_controller_decorator.rb` with the `prepended` hook and the `prepend` wiring:
 
 ```ruby
 # backend/app/controllers/spree/admin/products_controller_decorator.rb
@@ -204,12 +212,12 @@ For Turbo Streams (server-pushed UI updates), the same patterns apply as any Rai
 |---|---|
 | Add a sidebar item linking to your own page | `Spree.admin.navigation.sidebar.add` in an initializer |
 | Add a column to an admin table | `Spree.admin.tables.<name>.add` in an initializer |
-| Add a new resource CRUD section | `bin/rails g spree_admin:scaffold Spree::YourModel` |
+| Add a new resource CRUD section | `bin/rails g spree:admin:scaffold Spree::YourModel` |
 | Change how an existing page looks | Override the view in `backend/app/views/spree/admin/...` |
 | Add a new action to a controller | Decorator (last resort — see `spree-project` skill first) |
 | Make a form field interactive | Stimulus controller + `data-controller="..."` in the view |
 | Push real-time updates to the UI | Turbo Stream broadcasts from a subscriber or service |
-| Change admin styling globally | Custom Tailwind classes; the admin uses Tailwind via `spree_admin/app/assets/stylesheets/spree/admin/application.css` |
+| Change admin styling globally | Edit `backend/app/assets/tailwind/spree_admin.css` (created by the installer) — it imports the gem's base styles from `app/assets/tailwind/spree/admin/index.css`; add `@theme` overrides and custom Tailwind there |
 
 ## What the legacy admin doesn't ship that the React dashboard does
 
@@ -221,7 +229,7 @@ If you're choosing between the legacy admin and the React dashboard, here's what
 | Real-time UI updates | Turbo Streams (server pushes) | TanStack Query (client polls/refetches) |
 | Multi-store support | Yes | Yes (built-in, store switcher in nav) |
 | Mobile-friendly | Limited | Yes (responsive layout) |
-| Slot-based UI extensions | No (view-override only) | Yes (named injection points) |
+| Slot-based UI extensions | Yes (`Spree.admin.partials` injection points — register ERB partials into named slots) | Yes (named injection points, React components) |
 | Type safety on extensions | No | Yes (TypeScript + Zod schemas) |
 | Translation infrastructure | Rails i18n (server-side) | i18next (client-side, with same key conventions) |
 
@@ -232,5 +240,5 @@ If you don't need slots / TypeScript types / mobile, the legacy admin is more th
 - **Admin source:** `bundle show spree_admin` to find the installed gem path. The README at the root of the gem covers the philosophy.
 - **Customization docs:** `node_modules/@spree/docs/dist/developer/admin/` covers patterns.
 - **Navigation API:** `Spree::Admin::Navigation` source — the full method surface for nav customization.
-- **Table API:** `Spree::Admin::Tables` source — column types, options, sorting/filtering details.
+- **Table API:** `Spree::Admin::Table` (`app/models/spree/admin/table.rb`) and `Spree::Admin::Table::Column` (`app/models/spree/admin/table/column.rb`) inside the gem — column types, options, sorting/filtering details. The registry behind `Spree.admin.tables` is `Spree::Admin::Engine::TablesEnvironment` in `lib/spree/admin/engine.rb`.
 - **Scaffold generator:** `bundle show spree_admin`/lib/generators/spree/admin/scaffold/ has the template files you can copy for advanced customization.

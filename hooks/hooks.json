@@ -1,5 +1,5 @@
 {
-  "description": "Spree safety hooks — block destructive database commands in production-shaped contexts, warn on hardcoded secrets in edits.",
+  "description": "Spree safety hooks — block destructive database commands and force-pushes to main/master, warn on hardcoded secrets in edits.",
   "hooks": {
     "PreToolUse": [
       {

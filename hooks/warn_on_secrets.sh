@@ -5,9 +5,11 @@
 # legitimate edit is more painful than a soft warning.
 #
 # Reads the tool result JSON from stdin. The file path is in tool_input.file_path
-# (Edit / Write) or tool_input.path (MultiEdit). We just re-scan the file.
+# (Edit / Write / MultiEdit). We just re-scan the file.
 #
-# Returns 0 always; emits stderr message that Claude treats as advisory.
+# Exits 2 when matches are found so the warning (stderr) is fed back to Claude;
+# PostToolUse exit 2 is advisory — the tool already ran, so the edit stays applied.
+# Exits 0 (silent) otherwise. Note: stderr on exit 0 is NOT shown to Claude.
 
 set -euo pipefail
 
@@ -18,7 +20,6 @@ fi
 
 input="$(cat)"
 file="$(echo "$input" | sed -n 's/.*"file_path":[[:space:]]*"\([^"]*\)".*/\1/p')"
-[[ -z "$file" ]] && file="$(echo "$input" | sed -n 's/.*"path":[[:space:]]*"\([^"]*\)".*/\1/p')"
 
 # Can't read the file? Bail silently.
 # Use a single bracketed test — `[[ A ]] || [[ B ]] && C` parses as
@@ -40,6 +41,9 @@ declare -a patterns=(
   # Stripe live keys (loud — block-worthy in practice, but we warn)
   'sk_live_[A-Za-z0-9]{24,}'
   'rk_live_[A-Za-z0-9]{24,}'
+
+  # Spree Admin API secret keys (sk_ + 24 base58 chars)
+  'sk_[1-9A-HJ-NP-Za-km-z]{24}'
 
   # AWS access key ID (well-known shape)
   'AKIA[0-9A-Z]{16}'
@@ -79,6 +83,7 @@ fixtures, example strings), ignore this warning.
 
 Set SPREE_HOOKS_DISABLE=1 to silence these warnings entirely.
 EOF
+  exit 2
 fi
 
 exit 0

@@ -36,7 +36,7 @@ npx skills update
 |---|---|
 | `spree-project` | General Spree project context — conventions, customization patterns, common commands. |
 | `spree-customization` | Decision tree for "where does my customization belong" — routes to the right specific skill. Use FIRST when the pattern isn't obvious. |
-| `spree-resource` | Adding a new model + API endpoint via the `spree:api_resource` generator. |
+| `spree-resource` | Adding a new model + API endpoint via the `spree:api_resource` generator, or a model-only resource via `spree:model`. |
 | `spree-decorators` | Extending existing Spree models/controllers via decorators (`Module#prepend`). |
 | `spree-dependencies` | Swapping core Spree services via `Spree.dependencies` — cart, checkout, ability, serializers. Includes the introspection rake tasks. |
 | `spree-api-v3` | Spree REST API v3 conventions — Store vs Admin surfaces, auth (pk_/sk_/JWT), scopes, prefixed IDs, envelope, Ransack filters. |
@@ -65,6 +65,13 @@ npx skills update
 
 Invoked by Claude (not the user) for multi-step Spree work that benefits from a fresh context — audits, multi-resource API planning, checkout flow investigations.
 
+### Two slash commands (Claude Code plugin only)
+
+| Command | What it does |
+|---|---|
+| `/spree:doctor` | Diagnose the local dev stack — Docker, containers, env, web, migrations, job queues — and prescribe the exact fix. |
+| `/spree:audit-upgrade [version]` | Read-only upgrade-readiness audit: checks the target version's breaking changes against your code (via the `spree-expert` subagent), shows the manifest plan, and produces a remediation checklist. |
+
 ### Two safety hooks (Claude Code only)
 
 | Hook | What it does |
@@ -72,7 +79,7 @@ Invoked by Claude (not the user) for multi-step Spree work that benefits from a 
 | `PreToolUse` on `Bash` | Blocks destructive database commands (`rake db:drop`, `Spree::Model.delete_all`, raw `DROP TABLE spree_*`, force-push to main/master). |
 | `PostToolUse` on `Edit`/`Write`/`MultiEdit` | Warns when an edit adds a hardcoded secret (Stripe live keys, AWS access keys, GitHub PATs, OpenAI/Anthropic keys). |
 
-Hooks honor `SPREE_HOOKS_DISABLE=1` as an escape hatch. They require the Claude Code plugin install path below — `npx skills add` installs skills + subagent, but not hooks (the `${CLAUDE_PLUGIN_ROOT}` path resolution that hooks need only works under the plugin install).
+Hooks honor `SPREE_HOOKS_DISABLE=1` as an escape hatch. Like the slash commands, they require the Claude Code plugin install path below — `npx skills add` installs skills + subagent, but not commands or hooks (the `${CLAUDE_PLUGIN_ROOT}` path resolution that hooks need only works under the plugin install).
 
 ## Claude Code: also get the safety hooks
 
@@ -83,7 +90,7 @@ If you're on Claude Code and want the safety hooks too, install as a plugin **fr
 /plugin install spree@spree
 ```
 
-Plugin install gives you everything `npx skills add` does **plus** the two safety hooks. Use one path or the other — don't double-install (skills will collide).
+Plugin install gives you everything `npx skills add` does **plus** the two slash commands and the two safety hooks. Use one path or the other — don't double-install (skills will collide).
 
 ## Cross-tool compatibility
 

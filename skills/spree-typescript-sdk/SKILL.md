@@ -58,7 +58,7 @@ Every resource exposes the same five methods (subject to per-resource availabili
 client.<resource>.list(params?, options?)              // GET   index
 client.<resource>.get(idOrSlug, params?, options?)     // GET   show
 client.<resource>.create(body, options?)               // POST  create
-client.<resource>.update(id, body, options?)           // PUT   update
+client.<resource>.update(id, body, options?)           // PATCH update
 client.<resource>.delete(id, options?)                 // DELETE
 ```
 
@@ -94,13 +94,15 @@ Each setter mutates the in-memory defaults. The next request uses the new values
 await client.products.list({
   page: 2,
   limit: 50,
-  filter: { name_cont: 'shirt', price_gteq: 20, price_lteq: 100 },
+  name_cont: 'shirt',
+  price_gte: 20,
+  price_lte: 100,
   sort: '-created_at',
   expand: ['images', 'default_variant'],
 })
 ```
 
-Internally `filter` keys become `q[name_cont]=shirt&q[price_gteq]=20` via `transformListParams` in `@spree/sdk-core` — you don't need to write Ransack predicates by hand. The `expand` array becomes `?expand=images,default_variant` for the API.
+List params are flat. Internally any key that is not `page`/`limit`/`expand`/`sort`/`fields` becomes a Ransack predicate via `transformListParams` in `@spree/sdk-core`: `name_cont: 'shirt'` → `q[name_cont]=shirt` (array values get a `[]` suffix: `q[with_option_value_ids][]`). The `expand` array becomes `?expand=images,default_variant`. Do not nest predicates under a `filter` key — there is no such param; a nested object would serialize as `q[filter]=[object Object]`.
 
 ### Error handling
 
@@ -112,7 +114,7 @@ try {
 } catch (err) {
   if (err instanceof SpreeError) {
     err.status       // 422
-    err.code         // 'validation_failed'
+    err.code         // 'validation_error'
     err.message      // human message
     err.details      // { variant_id: ["is out of stock"], ... }
   }
@@ -120,21 +122,21 @@ try {
 }
 ```
 
-For 422 in form contexts, the admin SPA's `mapSpreeErrorsToForm(err, form.setError)` maps `details` directly onto React Hook Form's `setError`. That helper lives in `@/lib/form-errors` in the dashboard, not in the SDK itself — but the SDK provides `err.details` in the shape that mapper expects.
+For 422 in form contexts, the admin SPA's `mapSpreeErrorsToForm(err, form.setError)` maps `details` directly onto React Hook Form's `setError`. That helper lives in `@spree/dashboard-core` (packages/dashboard-core/src/lib/form-errors.ts), not in the SDK itself — but the SDK provides `err.details` in the shape that mapper expects.
 
 ### Retry config
 
 ```ts
 const client = createClient({
   baseUrl, publishableKey,
-  retry: { maxRetries: 3, backoffMs: 200, retryOn: [429, 502, 503, 504] },
+  retry: { maxRetries: 3, baseDelay: 200, retryOnStatus: [429, 502, 503, 504] },
 })
 
 // Or disable entirely
 const client = createClient({ baseUrl, publishableKey, retry: false })
 ```
 
-Defaults: 3 retries, exponential backoff (200ms → 400ms → 800ms), retries on 429 + 5xx + network errors. Honors `Retry-After` headers on 429.
+Defaults: 2 retries, exponential backoff with jitter (300ms base, capped at 10s), retries on 429/500/502/503/504 + network errors. Honors `Retry-After` headers. Mutating requests get an auto-generated `Idempotency-Key` so they can be retried safely.
 
 ### Custom fetch (testing, server-only, etc.)
 
@@ -153,9 +155,9 @@ Use this for:
 ### Generated types
 
 ```ts
-import type { StoreProduct, StoreOrder, StoreCart } from '@spree/sdk/types'
+import type { Product, Order, Cart } from '@spree/sdk/types'
 
-function renderProduct(product: StoreProduct) { ... }
+function renderProduct(product: Product) { ... }
 ```
 
 Types are generated from Alba serializers via `bundle exec rake typelizer:generate` and published with each release. They always match the API exactly (no drift).
@@ -163,10 +165,10 @@ Types are generated from Alba serializers via `bundle exec rake typelizer:genera
 ### Zod schemas (runtime validation)
 
 ```ts
-import { storeProductSchema } from '@spree/sdk/zod'
+import { ProductSchema } from '@spree/sdk/zod'
 
-const product = storeProductSchema.parse(unsafeData)   // throws if shape doesn't match
-const parsed = storeProductSchema.safeParse(unsafeData)
+const product = ProductSchema.parse(unsafeData)   // throws if shape doesn't match
+const parsed = ProductSchema.safeParse(unsafeData)
 if (parsed.success) { ... }
 ```
 
@@ -200,13 +202,14 @@ This is a Node-only export (uses `node:crypto`). For Edge runtimes, use Web Cryp
 ### Typed webhook event payloads
 
 ```ts
-import type { WebhookEvent, StoreOrder } from '@spree/sdk/webhooks'
+import type { WebhookEvent } from '@spree/sdk/webhooks'
+import type { Order } from '@spree/sdk'
 
-const event = JSON.parse(rawBody) as WebhookEvent<StoreOrder>
+const event = JSON.parse(rawBody) as WebhookEvent<Order>
 
 if (event.name === 'order.completed') {
   event.data.id      // 'or_…'
-  event.data.total   // typed against StoreOrder
+  event.data.total   // typed against Order
 }
 ```
 
@@ -215,8 +218,10 @@ if (event.name === 'order.completed') {
 ### Install
 
 ```bash
-npm install @spree/admin-sdk
+npm install @spree/admin-sdk@next
 ```
+
+The Admin SDK is in Developer Preview and published under the `next` dist-tag — a plain `npm install @spree/admin-sdk` resolves `latest` and will not get the preview release.
 
 ### Two auth modes
 
@@ -231,7 +236,7 @@ const admin = createAdminClient({
   storeId: 'store_k5nR8xLq',                         // optional multi-store routing
 })
 
-const { data: orders } = await admin.orders.list({ filter: { state_eq: 'complete' } })
+const { data: orders } = await admin.orders.list({ state_eq: 'complete' })
 ```
 
 The secret key carries scopes (`read_orders`, `write_products`, etc.) — see `spree-api-v3` for the scope list. Requests for endpoints outside the key's scopes get 403.
@@ -247,6 +252,8 @@ const admin = createAdminClient({
 ```
 
 JWT mode uses CanCanCan abilities on the backend. What the user can do depends on their role. The Admin SDK defaults to `credentials: 'include'` so the admin refresh-token cookie is sent on `/api/v3/admin/auth/*` endpoints.
+
+Unlike the Store SDK, the admin client holds its JWT in client state: call `admin.setToken(newJwt)` after a refresh, `admin.setStore(storeId)` to switch stores (sets the `X-Spree-Store-Id` header), and `admin.onUnauthorized(async () => { /* refresh token, call admin.setToken(...) */ return true })` to transparently retry a 401'd request once with the new token (paths under `/auth/` are excluded from retry; return `false` to let the 401 propagate).
 
 ### Resource shape
 
@@ -274,9 +281,13 @@ admin.store.get()        // current store config
 The admin SPA's CSV export feature uses this:
 
 ```ts
-const exportRecord = await admin.exports.create({ resource: 'orders', filter: {...} })
-// poll exportRecord.status, then download
-const blob = await admin.exports.download(exportRecord.id)
+const exportRecord = await admin.exports.create({
+  type: 'Spree::Exports::Orders',
+  search_params: { state_eq: 'complete' },
+})
+// poll admin.exports.get(exportRecord.id) until done === true, then fetch
+// download_url with Authorization: Bearer <jwt> and create a Blob —
+// there is no .download() method
 ```
 
 Always stream bytes (`send_data` backend / `Blob` frontend); never `redirect_to attachment.url` + `window.location.href`. JWT downloads must use fetch + Blob so the Authorization header is sent.
@@ -303,11 +314,11 @@ Both `Client` and `AdminClient` expose a low-level `request<T>(method, path, opt
 
 ```ts
 // Store SDK — calling a custom endpoint you added to your Spree backend
-type Brand = { id: string; type: 'brand'; name: string; slug: string }
+type Brand = { id: string; name: string; slug: string }
 type ListResponse<T> = { data: T[]; meta: { page: number; pages: number; count: number } }
 
 const { data: brands } = await client.request<ListResponse<Brand>>('GET', '/brands', {
-  params: { 'q[name_cont]': 'acme', page: 1, per_page: 25 },
+  params: { 'q[name_cont]': 'acme', page: 1, limit: 25 },
 })
 
 const brand = await client.request<Brand>('GET', `/brands/${id}`)
@@ -332,11 +343,10 @@ Once you're calling a custom endpoint from more than one place, wrap it. The con
 
 ```ts
 // src/spree-extensions/brands-client.ts
-import type { RequestFn, ListResponse } from '@spree/sdk-core'
+import type { RequestFn, ListResponse } from '@spree/sdk'
 
 export interface Brand {
   id: string
-  type: 'brand'
   name: string
   slug: string
   description: string | null
@@ -344,15 +354,22 @@ export interface Brand {
 
 export interface BrandListParams {
   page?: number
-  per_page?: number
-  filter?: { name_cont?: string; slug_eq?: string }
+  limit?: number
+  name_cont?: string
+  slug_eq?: string
 }
 
 export class BrandsClient {
   constructor(private readonly request: RequestFn) {}
 
-  list(params?: BrandListParams) {
-    return this.request<ListResponse<Brand>>('GET', '/brands', { params })
+  list(params: BrandListParams = {}) {
+    // request() is raw — it does not apply transformListParams, so wrap
+    // Ransack predicates in q[...] yourself
+    const { page, limit, ...predicates } = params
+    const q = Object.fromEntries(Object.entries(predicates).map(([k, v]) => [`q[${k}]`, v]))
+    return this.request<ListResponse<Brand>>('GET', '/brands', {
+      params: { page, limit, ...q },
+    })
   }
   get(id: string) {
     return this.request<Brand>('GET', `/brands/${id}`)
@@ -361,9 +378,9 @@ export class BrandsClient {
     return this.request<Brand>('POST', '/brands', { body })
   }
   update(id: string, body: Partial<Brand>) {
-    return this.request<Brand>('PUT', `/brands/${id}`, { body })
+    return this.request<Brand>('PATCH', `/brands/${id}`, { body })
   }
-  destroy(id: string) {
+  delete(id: string) {
     return this.request<void>('DELETE', `/brands/${id}`)
   }
 }
@@ -397,30 +414,31 @@ export function createExtendedClient(config: ClientConfig): ExtendedClient {
 import { createExtendedClient } from '@/spree-extensions'
 
 const spree = createExtendedClient({ baseUrl, publishableKey })
-const { data: brands } = await spree.brands.list({ filter: { name_cont: 'acme' } })
+const { data: brands } = await spree.brands.list({ name_cont: 'acme' })
 ```
 
 Same trick for `@spree/admin-sdk`: import `createAdminClient` + `AdminClient`, extend the interface, attach wrappers in your factory.
 
 ### Decorating a built-in resource
 
-If a third-party extension adds endpoints under an existing resource (e.g. `/products/:id/republish` for a syndication extension), decorate the existing resource instead of replacing it:
+If a third-party extension adds endpoints under an existing resource (e.g. `/products/:id/republish` for a syndication extension), decorate the existing resource instead of replacing it. **Don't spread the client itself** — `createClient` returns an object whose resources live on its prototype, so `{ ...base }` would copy only the locale/currency setters and drop `carts`, `request`, and every other resource. Attach the decorated resource onto the client instead:
 
 ```ts
 import { createClient } from '@spree/sdk'
 
 const base = createClient({ baseUrl, publishableKey })
 
-export const spree = {
-  ...base,
+export const spree = Object.assign(base, {
   products: {
     ...base.products,
     republish(id: string) {
       return base.request<void>('POST', `/products/${id}/republish`)
     },
   },
-}
+})
 ```
+
+Capturing `Object.assign`'s return value gives `spree` the intersection type, so `spree.products.republish(...)` typechecks alongside the built-in `spree.products.list()`. Spreading `base.products` is safe — resource methods are own properties with lexically bound `this`, so they keep working after the copy.
 
 ### Type generation for custom resources
 
@@ -432,14 +450,14 @@ cd spree/api && bundle exec rake typelizer:generate
 
 The output goes to `packages/sdk/src/types/generated/` if you're in the monorepo, but in a standalone consumer project you'd configure Typelizer's output path to your project's `types/spree-extensions/` directory. Re-run after serializer changes; check the generated `.d.ts` into version control.
 
-For Zod schemas to match, copy the same `pnpm generate:zod` pattern using the `ts-to-zod` config (`packages/sdk/ts-to-zod.config.js`) — point it at your generated types directory.
+For Zod schemas to match, copy the same `pnpm generate:zod` pattern — it's a small custom script (`packages/sdk/scripts/generate-zod.ts`) that converts the generated TS interfaces to Zod schemas; point its input/output dirs at your generated types directory.
 
 If you're not running the monorepo, just hand-write the TypeScript interfaces. The serializer is the source of truth either way — match attribute names + types and you're done.
 
 ### What you should NOT do
 
 - **Don't fork `@spree/sdk`.** When the package updates, you're stuck merging. Extend, don't fork.
-- **Don't reach into `@spree/sdk-core`** for anything other than the published `RequestFn` / `ListResponse` types. The HTTP and retry internals can change between minor releases.
+- **Don't depend on `@spree/sdk-core`** — it's a private workspace package, never published to npm. Everything you need is re-exported from the public packages: `@spree/sdk` exports `RequestFn`, `ListResponse`, `RequestOptions`, and `SpreeError`; `@spree/admin-sdk` exports `ListResponse`, `RequestOptions`, and `SpreeError` (no `RequestFn` — type admin wrapper constructors with `AdminClient['request']`). The HTTP and retry internals can change between minor releases.
 - **Don't bypass the SDK by calling `fetch` directly** in app code. You lose retry, error normalization, default headers (locale/currency/channel), and auth. If the SDK doesn't cover what you need, use `client.request` — it's the same fetch with all the goodies still applied.
 
 ## Testing with MSW
@@ -454,7 +472,7 @@ import { http, HttpResponse } from 'msw'
 export const server = setupServer(
   http.get('https://test.spree.local/api/v3/store/products', () => {
     return HttpResponse.json({
-      data: [{ id: 'prod_test1', type: 'product', name: 'Test product' }],
+      data: [{ id: 'prod_test1', name: 'Test product' }],
       meta: { page: 1, count: 1, pages: 1, limit: 25 },
     })
   }),
@@ -511,7 +529,7 @@ const spree = createClient({
 })
 
 export default async function ProductsPage() {
-  const { data: products } = await spree.products.list({ per_page: 24 })
+  const { data: products } = await spree.products.list({ limit: 24 })
   return <ProductGrid products={products} />
 }
 ```
@@ -521,7 +539,7 @@ export default async function ProductsPage() {
 ```ts
 // app/api/webhooks/spree/route.ts
 import { verifyWebhookSignature, type WebhookEvent } from '@spree/sdk/webhooks'
-import type { StoreOrder } from '@spree/sdk/types'
+import type { Order } from '@spree/sdk/types'
 
 export async function POST(request: Request) {
   const rawBody = await request.text()
@@ -532,7 +550,7 @@ export async function POST(request: Request) {
     return new Response('Unauthorized', { status: 401 })
   }
 
-  const event = JSON.parse(rawBody) as WebhookEvent<StoreOrder>
+  const event = JSON.parse(rawBody) as WebhookEvent<Order>
   switch (event.name) {
     case 'order.completed':
       await syncToERP(event.data)
@@ -551,7 +569,7 @@ import { spree } from '@/lib/spree-client'
 function useProducts(filters: ProductFilters) {
   return useQuery({
     queryKey: ['products', filters],
-    queryFn: () => spree.products.list({ filter: filters }),
+    queryFn: () => spree.products.list(filters),
   })
 }
 
@@ -568,14 +586,22 @@ In `@spree/dashboard`, never call `adminClient` directly from components — wra
 
 ```ts
 // src/hooks/use-products.ts
-import { useResourceList } from '@/hooks/use-resource'
-import { adminClient } from '@/lib/admin-client'
+import { adminClient, useResourceKey } from '@spree/dashboard-core'
+import { useQuery } from '@tanstack/react-query'
 
-export function useProducts(filters?: ProductFilters) {
-  return useResourceList(
-    ['products', filters],
-    (params) => adminClient.products.list({ ...params, filter: filters }),
-  )
+interface UseProductsParams {
+  page?: number
+  limit?: number
+  sort?: string
+  search?: string
+}
+
+export function useProducts({ page = 1, limit = 25, sort = '-updated_at', search }: UseProductsParams = {}) {
+  return useQuery({
+    queryKey: useResourceKey('products', { page, limit, sort, search }),
+    queryFn: () =>
+      adminClient.products.list({ page, limit, sort, ...(search ? { name_cont: search } : {}) }),
+  })
 }
 ```
 

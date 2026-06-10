@@ -5,6 +5,8 @@ description: Use when the user is writing or running automated tests for a Spree
 
 # Spree Testing
 
+> Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
+
 Spree's testing stack:
 
 | Tool | Role |
@@ -25,7 +27,7 @@ bin/rails g spree_dev_tools:install  # adds Spree-specific helpers + shared cont
 
 `spree_dev_tools` is the key piece. It wires up:
 - `stub_authorization!` for admin controller/feature specs
-- The `'API v3 Store'` shared context (provisions a store, publishable API key, JWT tokens)
+- Spree's core test helpers (factories, preferences, Capybara config)
 - Factory Bot configuration that auto-loads Spree's factories
 - Capybara driver setup for feature tests
 
@@ -39,14 +41,14 @@ printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR...' > spec/fixtures/files/logo.png
 
 ## Pulling in Spree's factories
 
-`spree_dev_tools` exposes `Spree::TestingSupport::Factories` — the same factories Spree itself uses in its own specs (`spree/core/lib/spree/testing_support/factories/`). You get factories for every Spree model:
+`spree_dev_tools` requires `spree/testing_support/factories` — the same factories Spree itself uses in its own specs (`spree/core/lib/spree/testing_support/factories/`). You get factories for every Spree model:
 
 ```ruby
 create(:store)           # Spree::Store
 create(:product)         # Spree::Product (with default_variant, prices)
 create(:variant)         # Spree::Variant
 create(:order)           # Spree::Order
-create(:order, :with_line_items)
+create(:order_with_line_items)
 create(:completed_order_with_totals)
 create(:user)            # Spree::User
 create(:admin_user)
@@ -56,16 +58,17 @@ create(:promotion)
 create(:payment_method)
 ```
 
-Common traits (each factory has its own list — check `bundle show spree_core`/lib/spree/testing_support/factories/`):
+Spree mostly ships preset variations as nested child factories rather than traits — check `bundle show spree_core`/lib/spree/testing_support/factories/ for each factory's list:
 
 ```ruby
-create(:product, :with_variants)
-create(:product, :in_stock)
-create(:order, :with_line_items, line_items_count: 3)
-create(:order, :paid)
-create(:order, :shipped)
-create(:shipment, :ready)
-create(:payment, :completed)
+create(:product_in_stock)                            # product with stock on hand
+create(:product_with_option_types)                   # product with an option type + values
+create(:variant, product: product)                   # add a variant to an existing product
+create(:order_with_line_items, line_items_count: 3)
+create(:order_ready_to_ship)                         # complete order, payment_state 'paid', shipments ready
+create(:shipped_order)
+create(:shipment, state: 'ready')                    # shipment factory has no traits — override state
+create(:payment, state: 'completed')                 # payment factory has no traits — override state
 ```
 
 **Always use factories — never call `Model.create` directly in tests.** Factories handle dependencies (stores, currencies, shipping categories) you don't want to think about per-test.
@@ -164,11 +167,14 @@ end
 
 ### API v3 Store controller spec
 
-Use the shared context — it provisions a default store + a publishable API key:
+Scaffolding a new API resource? `bin/rails g spree:api_resource Name attr:type` (or `spree generate api_resource ...` via the Spree CLI) scaffolds these files for you: v3 Store + Admin controller specs under `spec/controllers/spree/api/v3/{store,admin}/` and a Factory Bot factory at `spec/factories/spree/<name>_factory.rb` (FactoryBot's default scan path). Pass `--skip-specs` to skip the controller specs (the factory is always generated).
+
+Use the shared context — it provisions a default store + a publishable API key. The `'API v3 Store'` / `'API v3 Admin'` shared contexts live in the `spree_api` gem — add `require 'spree/api/testing_support/v3/base'` at the top of the spec (after `require 'rails_helper'`) before `include_context 'API v3 Store'`.
 
 ```ruby
 # spec/controllers/spree/api/v3/store/brands_controller_spec.rb
 require 'rails_helper'
+require 'spree/api/testing_support/v3/base'
 
 RSpec.describe Spree::Api::V3::Store::BrandsController, type: :controller do
   render_views
@@ -208,6 +214,8 @@ RSpec.describe Spree::Api::V3::Store::BrandsController, type: :controller do
 end
 ```
 
+`json_response` comes from `Spree::TestingSupport::ApiHelpers` (defined in spree_dev_tools' generated `spec/support/spree.rb`), which is only included for `type: :request` specs by default. For API controller specs, extend the include in `spec/support/spree.rb`: `config.include Spree::TestingSupport::ApiHelpers, type: :controller`.
+
 Equivalent shared context for admin: `include_context 'API v3 Admin'` (provisions admin JWT + a secret key). Use it for Admin API controller specs.
 
 ### When to write controller specs vs API integration specs
@@ -225,7 +233,7 @@ Integration specs are slow and brittle to maintain. Don't try to cover every com
 
 ## Writing feature specs (Capybara)
 
-Feature specs drive a real browser (headless Chrome by default) through the legacy Rails admin (or storefront).
+Feature specs use rack_test by default (no browser, no JavaScript); tag examples with `js: true` to drive a real headless Chrome browser through the legacy Rails admin (or storefront). Turbo-driven admin pages need `js: true` — without it, `wait_for_turbo` and any Turbo Stream/Frame behavior is a no-op.
 
 ```ruby
 # spec/features/spree/admin/brands_spec.rb
@@ -254,6 +262,16 @@ end
 
 The legacy admin uses Turbo (Hotwire). After clicking a button that triggers a Turbo Stream / Frame update, the response is async — Capybara needs to wait for the DOM update. `wait_for_turbo` waits for Turbo's in-flight requests to settle.
 
+`wait_for_turbo` comes from `Spree::Admin::TestingSupport::CapybaraUtils` in the `spree_admin` gem — it is NOT wired up by `spree_dev_tools:install` (the generator skips the gem's `spree_admin.rb` support file). If you get `NoMethodError: undefined method 'wait_for_turbo'`, add a `spec/support/spree_admin.rb`:
+
+```ruby
+require 'spree/admin/testing_support/capybara_utils'
+
+RSpec.configure do |config|
+  config.include Spree::Admin::TestingSupport::CapybaraUtils, type: :feature
+end
+```
+
 ```ruby
 click_on 'Create'
 wait_for_turbo            # <- without this, the next expect runs before the update
@@ -272,6 +290,7 @@ The React admin (`@spree/dashboard`) uses **Playwright**, not Capybara. See the 
 
 ```bash
 bundle exec rspec                            # all
+spree exec bundle exec rspec                 # Spree CLI (Docker) projects: runs inside the web container (invoke as `npx spree` / `pnpm exec spree` if not on PATH)
 bundle exec rspec spec/models/spree/brand_spec.rb    # one file
 bundle exec rspec spec/models/spree/brand_spec.rb:15 # one test (line number)
 bundle exec rspec spec/features/             # one directory
@@ -283,20 +302,22 @@ bundle exec parallel_rspec spec
 bundle exec parallel_rspec -n 4 spec         # 4 workers
 ```
 
-After schema changes, regenerate the test app:
+When developing the Spree gems themselves or a Spree extension — not a Spree app — specs run against a generated dummy app; after schema changes regenerate it:
 
 ```bash
 bundle exec rake test_app                    # default SQLite
 DB=postgres DB_USERNAME=postgres DB_PASSWORD=password DB_HOST=localhost bundle exec rake test_app
 ```
 
-Then re-run `parallel_setup` for parallel workers.
+(Spree's engine Rakefiles define `test_app` via `spree/testing_support/common_rake`; extension Rakefiles delegate to `extension:test_app` from `spree/testing_support/extension_rake`. `bundle exec rake parallel_setup` is likewise engine/extension-only.) Then re-run `parallel_setup` for parallel workers.
+
+In a Spree *app* there is no dummy app to regenerate — after running migrations, just run `bin/rails db:test:prepare`.
 
 ## Common Spree testing gotchas
 
 ### "spree_dummy_models table missing"
 
-Old test app. Regenerate: `bundle exec rake test_app`.
+(Spree gem development only — this hits Spree's own core/admin test suites, not apps or extensions; apps don't even have a `test_app` task.) The gem's dummy app is stale. Regenerate from the gem directory: `bundle exec rake test_app`.
 
 ### "ActiveRecord::ConnectionPool…" in parallel
 
@@ -308,7 +329,7 @@ bundle exec rake parallel_setup
 
 ### "Wrong currency in test"
 
-A factory created an order without specifying `currency`. The store's `default_currency` wins. To be explicit:
+The order factory hardcodes `currency { 'USD' }`, so orders are USD no matter what the store's `default_currency` is. To test another currency, be explicit:
 
 ```ruby
 create(:order, currency: 'EUR')
@@ -323,7 +344,7 @@ variant = create(:variant)
 variant.prices.create!(currency: 'EUR', amount: 10.00)
 ```
 
-Or use traits: `create(:variant, :with_default_prices)`.
+Or use the factory's transients: `create(:variant, price: 10.0, currency: 'EUR')` — the factory's `after(:create)` hook calls `set_price` with these, creating the Price in that currency.
 
 ### "Image attachments fail"
 
@@ -343,7 +364,7 @@ Don't write `Time.now` and hope.
 
 ### "Stock-related test fails when other tests interfered"
 
-Tests should clean up between runs (DatabaseCleaner). If you're seeing stock_items from other tests, check your `spec_helper.rb` — `spree_dev_tools` should set this up but custom config can break it.
+Tests should clean up between runs (DatabaseCleaner). If you're seeing stock_items from other tests, check `spec/support/database_cleaner.rb` (loaded via the support-file glob in `rails_helper.rb`) — `rails g spree_dev_tools:install` generates it, but custom config can break it.
 
 ### "TestApp regeneration is slow"
 
@@ -376,7 +397,7 @@ DO test:
 ## Where to read further
 
 - **Spree's own factories:** `bundle show spree_core`/lib/spree/testing_support/factories/ — read these to discover available traits.
-- **`spree_dev_tools` source:** look at the `lib/spree_dev_tools/install/` generator templates to see exactly what it adds.
+- **`spree_dev_tools` source:** look at `lib/spree_dev_tools/generators/install/` and `lib/spree_dev_tools/rspec/support/` to see exactly what it adds.
 - **Full tutorial:** `docs/developer/tutorial/testing.mdx` in the Spree docs — covers the Brand example end-to-end.
 - **Admin SPA E2E (different stack):** `spree-dashboard` skill.
 - **RSpec docs:** https://rspec.info/documentation/

@@ -40,7 +40,7 @@ Two surfaces under `/api/v3/`:
 - **Store API** (`/api/v3/store/*`) — customer-facing. Auth: publishable key (`pk_*`) + optional JWT customer. Read-only by default.
 - **Admin API** (`/api/v3/admin/*`) — back-office. Auth: secret key (`sk_*` with scoped permissions) OR JWT admin (with CanCanCan abilities). Full CRUD by default.
 
-Both share: prefixed IDs (`prod_…`, `or_…`, `variant_…`), `{ data, meta }` envelope on lists, Ransack filters (`q[name_cont]=...`), `include=...` for sideloading. See `skills/spree-api-v3/SKILL.md`.
+Both share: prefixed IDs (`prod_…`, `or_…`, `variant_…`), `{ data, meta }` envelope on lists, Ransack filters (`q[name_cont]=...`), `expand=...` for sideloading (and `fields=...` for sparse responses). See `skills/spree-api-v3/SKILL.md`.
 
 ### TypeScript
 
@@ -49,11 +49,11 @@ Both share: prefixed IDs (`prod_…`, `or_…`, `variant_…`), `{ data, meta }`
 
 ## Development commands
 
-Projects scaffolded with `create-spree-app` use the `@spree/cli` to drive the Docker-based dev environment:
+Projects scaffolded with `create-spree-app` use the `@spree/cli` to drive the Docker-based dev environment. **Flavor check first:** classic Rails apps with Spree gems (no Docker/CLI — typical pre-5.4, Rails app at the repo root) take the native equivalents instead — `bin/rails console`, `bin/rake spree:install:migrations && bin/rails db:migrate`, `bin/rake spree:upgrade`, `bin/rails g spree:api_resource …` — and paths lose the `backend/` prefix. The rake tasks and generators ship in the gems (spree_core 5.5+ for `spree:upgrade` and the generators — older apps gain them after the gem bump) and work identically in both flavors; only the wrapper differs.
 
 ```bash
 spree init                  # one-time setup: starts services, seeds DB, generates API key
-spree dev                   # start the stack and stream logs
+spree dev                   # run the stack in the foreground (Ctrl+C stops web + worker; DBs stay up)
 spree stop
 spree restart               # in-place restart for initializer changes
 spree logs                  # web (default) or `spree logs worker`
@@ -61,7 +61,7 @@ spree console               # Rails console
 spree migrate               # install + run pending migrations
 spree db:reset               # drop, recreate, seed
 spree routes                # bin/rails routes passthrough
-spree generate <args>       # Rails generator passthrough
+spree generate <args>       # run a generator — bare names auto-prefix to `spree:` (`model` → `spree:model`, `api_resource` → `spree:api_resource`); Rails built-ins (`migration`, `scaffold`, `job`, …) forwarded as-is
 spree exec <command>        # arbitrary command inside the web container
 spree rails <args>          # bin/rails passthrough
 spree bundle <args>         # bundle passthrough (lands in bundle_cache volume)
@@ -69,9 +69,19 @@ spree rake <task>
 spree upgrade               # walk version upgrade (bundle + migrate + spree:upgrade)
 spree eject                 # switch from prebuilt image to building from ./backend/
 spree build                 # rebuild dev image (after eject + Dockerfile/.ruby-version changes)
+spree update                # pull latest image + recreate containers
+spree migrate:status        # show migration status
+spree migrate:rollback      # roll back last migration (STEP=n for more)
+spree db:console            # psql session against the dev database
+spree task <name>           # rake task with auto `spree:` prefix (e.g. spree task search:reindex)
+spree seed                  # seed the database
+spree sample-data           # load sample data (products, categories, images)
+spree user create           # create an admin user (interactive, or --email/--password)
+spree api-key create|list|revoke   # manage publishable/secret API keys (--type publishable|secret)
+spree open                  # open the admin dashboard in the browser
 ```
 
-For the full command reference see `docs/developer/cli/quickstart.mdx` in the installed `@spree/docs` package.
+For the full command reference see `dist/developer/cli/quickstart.md` in the installed `@spree/docs` package (source: `docs/developer/cli/quickstart.mdx` in the spree monorepo).
 
 ### Testing
 
@@ -80,14 +90,19 @@ For the full command reference see `docs/developer/cli/quickstart.mdx` in the in
 bundle exec rspec                       # full suite
 bundle exec rspec spec/models/...       # one file
 bundle exec rspec spec/models/...:42    # one test (by line number)
-bundle exec rake test_app               # regenerate the test app (after schema changes)
-bundle exec parallel_rspec spec         # parallel run (after parallel_setup)
+
+# Only when developing a Spree engine or extension (these tasks don't exist in a scaffolded app backend):
+bundle exec rake test_app               # regenerate the dummy test app (after schema changes)
+bundle exec rake parallel_setup         # create per-worker test DBs
+bundle exec parallel_rspec spec         # parallel run
 ```
 
 ### Admin dashboard (React SPA)
 
+These commands apply only in a spree/spree monorepo checkout — projects scaffolded with `create-spree-app` have no `packages/` directory. To consume or extend `@spree/dashboard` from your own project, see `skills/spree-dashboard/SKILL.md`.
+
 ```bash
-cd packages/dashboard       # only if running the React dashboard locally
+cd packages/dashboard       # spree/spree monorepo checkout only
 pnpm dev                    # http://localhost:5173 (proxies /api/* to :3000)
 pnpm test:e2e               # Playwright
 ```
@@ -96,7 +111,7 @@ pnpm test:e2e               # Playwright
 
 - RSpec + Factory Bot + Capybara — **not** Minitest, **not** fixtures.
 - Install `spree_dev_tools` for Spree-specific helpers (`stub_authorization!`, `'API v3 Store'` shared context, Spree factories).
-- Always use factories (`create(:order, :with_line_items)`), never `Model.create` directly.
+- Always use factories (`create(:order_with_line_items)`), never `Model.create` directly.
 - Prefer `build` over `create` when persistence isn't needed.
 - React dashboard uses Playwright (not Capybara) with UI-only assertions — see `skills/spree-testing/SKILL.md`.
 - Don't test Rails framework guarantees (strong params, presence validations). Test your custom logic.
@@ -104,7 +119,7 @@ pnpm test:e2e               # Playwright
 ## Security non-negotiables
 
 - Secrets live in Rails encrypted credentials or env vars — never in the repo.
-- Set `Spree::Config[:preference_encryptor_key]` in production so gateway secrets encrypt at rest.
+- Configure Rails Active Record encryption keys in production (`active_record.encryption.primary_key`, `deterministic_key`, `key_derivation_salt` — generate with `bin/rails db:encryption:init`, store in encrypted credentials). Spree uses `encrypts` for secrets like webhook signing keys and gateway customer profile IDs; these columns only encrypt at rest when AR encryption is configured. Keep `secret_key_base` stable within each environment.
 - Webhook receivers MUST verify HMAC-SHA256 signatures + timing-safe compare + replay window (default 5 min).
 - Publishable keys (`pk_*`) are safe in client code. Secret keys (`sk_*`) are server-to-server only — never ship in mobile apps or browser JS.
 - Grant secret keys minimum scopes (`read_orders`, `write_products`, etc.) — not `write_all`.
@@ -149,7 +164,7 @@ When the task domain matches one of these, read the corresponding `skills/<name>
 - Don't write `Spree::User.find(...)` — use `Spree.user_class.find(...)`.
 - Don't add foreign key constraints in migrations (Spree convention).
 - Don't add Rails enum columns — use strings.
-- Don't drop or truncate `spree_*` tables in development without backup. The `spree/agent-skills` plugin's safety hook blocks this automatically when installed via `/plugin install spree@spree` in Claude Code; other tools won't.
+- Don't drop or truncate `spree_*` tables in development without backup. The `spree/agent-skills` plugin's safety hook blocks the most dangerous of these automatically when installed via `/plugin install spree@spree` in Claude Code (DROP TABLE on any `spree_*` table, `db:drop`/`db:reset`, and TRUNCATE or mass-deletes of orders, payments, users); other tables and other tools aren't covered.
 - Don't bypass `current_store` scoping in custom controllers.
 - Don't expose raw integer IDs in API responses — always prefixed IDs (`prod_…`, `or_…`).
 - Don't fork `@spree/sdk` to add custom endpoints — extend it via `client.request` or a wrapped resource class.
@@ -157,6 +172,6 @@ When the task domain matches one of these, read the corresponding `skills/<name>
 ## Where to read further
 
 - **Spree developer docs:** https://spreecommerce.org/docs/developer
-- **Installed locally:** `node_modules/@spree/docs/dist/developer/` after running `spree init`
+- **Installed locally:** `node_modules/@spree/docs/dist/developer/` after scaffolding with `create-spree-app`
 - **Source code:** https://github.com/spree/spree
 - **Each `skills/<name>/SKILL.md` is self-contained** — read it when its domain is in scope.

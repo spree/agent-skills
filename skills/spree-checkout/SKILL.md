@@ -28,8 +28,8 @@ end
 ```
 
 So:
-- **All-digital orders** skip `delivery` (`delivery_required?` returns false when no shippable line items).
-- **Zero-total orders** (gift cards covering the total, free orders) skip `payment`.
+- **All-digital orders** are not skipped via `delivery_required?` — in core that method unconditionally returns `true` (decorate it to change). Instead, digital-only orders (`requires_ship_address?` is `!digital?`) still transition *into* `delivery`, then an `after_transition to: :delivery` hook (`move_to_next_step_if_address_not_required`) immediately calls `next!` to auto-advance past it.
+- **Zero-total orders** (free orders) skip `payment` — `payment_required?` is simply `total.to_f > 0.0`. Note gift cards do NOT zero the total: applying one creates a store-credit payment for the covered amount, so a gift-card-covered order still has `total > 0` and still goes through the `payment` step, where that payment satisfies it.
 - **`confirm`** is opt-in — disabled by default; some payment integrations enable it.
 
 The transition driver is `state_machines-activerecord`. Advance with `order.next!` (raises on failure) or `order.next` (returns false on failure).
@@ -85,15 +85,16 @@ module MyApp
         end
       end
 
-      def my_custom_step(order:, variant:, **)
-        # ...
+      def my_custom_step(order:, line_item:, line_item_created:, options:)
+        # ... your custom logic ...
+        success(order: order, line_item: line_item, line_item_created: line_item_created, options: options)
       end
     end
   end
 end
 ```
 
-When you subclass `Spree::Cart::AddItem`, keep all the parent's `run` steps and slot yours in — don't drop `:handle_stock_reservations` or you'll silently break stock reservations for orders in checkout.
+When you subclass `Spree::Cart::AddItem`, keep all the parent's `run` steps and slot yours in — don't drop `:handle_stock_reservations` or you'll silently break stock reservations for orders in checkout. Every `run` step receives the previous step's `success(...)` hash as keywords and must itself end with `success(...)`/`failure(...)` — that's why `my_custom_step` above takes the keys `handle_stock_reservations` returns and passes them along.
 
 ## Customizing the checkout flow
 
@@ -120,6 +121,8 @@ To **insert** a new step (e.g. a "review" step between `payment` and `confirm`):
 base.insert_checkout_step :review, after: :payment
 ```
 
+To **remove** a single step there's also `base.remove_checkout_step :address` (one step per call) — no need to re-declare the whole flow unless you're redefining it entirely.
+
 Common gotchas:
 
 - **Existing in-progress orders have a `state` that may not exist in your new flow.** Add a backfill rake task that resets them to `cart` or migrates to the new state.
@@ -129,11 +132,11 @@ Common gotchas:
 
 `Spree::Address` is used for both billing and shipping. Order has `bill_address_id` and `ship_address_id`. Both can point at the same address (one-form checkout); the validator allows nil for both during the `cart` state.
 
-Country/State are normalized to `Spree::Country` and `Spree::State` records (not free text). Form input from the storefront is validated against the country's `Spree::State` set. Countries without states (Andorra, etc.) skip state validation.
+Country/State are normalized to `Spree::Country` and `Spree::State` records (not free text). Form input from the storefront is validated against the country's `Spree::State` set. State validation is gated by `Spree::Config[:address_requires_state]` and the country's `states_required` flag — countries with `states_required: false` skip it entirely. A country with `states_required: true` but no seeded `Spree::State` records still requires a free-text `state_name`.
 
 ### Guest checkout vs logged-in
 
-`Order.user_id` is nullable. Guest orders have `email` set instead. After completion, guests can claim their order via the order number + email, OR sign up using the email (Spree links the order on registration if email matches).
+`Order.user_id` is nullable. Guest orders have `email` set instead. After completion, the guest's order token remains the credential for viewing the order — `GET /api/v3/store/orders/:id` with the `X-Spree-Token` header. If the guest opts into account creation at checkout, `Spree::Orders::CreateUserAccount` links the order to a new user (or an existing user with the same email) at completion. There is no number+email claim flow, and registering later does not auto-link past guest orders.
 
 For the storefront, the guest cart is tracked via a **cart token** (`Order.token` — a random per-cart string). The token is in a cookie or returned to the API client. JWT auth replaces token auth once the customer logs in.
 
@@ -157,7 +160,7 @@ Payment record created
 Order transitions to `confirm` or `complete`
 ```
 
-Events: `payment_session.completed`, `payment_session.failed`, `payment_session.canceled`, `payment_session.expired`. See the `spree-events-webhooks` skill.
+Events: `payment_session.processing`, `payment_session.completed`, `payment_session.failed`, `payment_session.canceled`, `payment_session.expired`. See the `spree-events-webhooks` skill.
 
 In your subscriber, the `payment_session.completed` event payload includes the `order_id` — you can hook in custom logic after the customer returns from the provider but before the order finalizes.
 
@@ -165,25 +168,25 @@ In your subscriber, the `payment_session.completed` event payload includes the `
 
 When the order transitions to `complete`:
 
-1. Inventory is allocated (stock reservations become committed, see 5.4's stock reservations system).
+1. Inventory is allocated via shipment finalization (`shipment.finalize!`); stock reservations from checkout are released (deleted) by `Spree::StockReservations::Release` once the order completes.
 2. `Spree::OrderUpdater` finalizes totals.
 3. `order.completed_at` is set.
 4. `order.publish_event('order.completed', payload)` fires — subscribers run, webhooks deliver.
-5. The cart token becomes irrelevant; the order is now identified by its `number` (e.g. `R123456789`).
+5. For guests, the order token remains the credential for viewing the completed order — the Store API scopes guest order lookup by `token` (`X-Spree-Token` header). The order's human-facing `number` (e.g. `R123456789`, assigned at creation) is for display and support, not API lookup.
 
 After complete, the order should be immutable from the customer's side. Admins can still adjust (refunds, return authorizations, edits) but those go through dedicated controllers, not the cart pipeline.
 
 ## Common checkout problems
 
-### "Order stuck in `cart`"
+### "Order stuck in checkout"
 
-- Missing address: `order.bill_address` or `order.ship_address` is nil. Run `order.next!` and check the validation errors.
-- Missing line items: `order.line_items.count == 0`. The state machine won't advance past `cart` without items.
-- Validation error on a line item: a variant became unavailable; check `order.line_items.map(&:variant).map(&:purchasable?)`.
+- Missing line items: `order.line_items.count == 0`. `ensure_line_items_present` runs on every transition out of `cart` — this is the only thing that blocks leaving `cart` itself.
+- Missing address: `order.bill_address` or `order.ship_address` is nil. This doesn't block leaving `cart` — it surfaces at `address → delivery` (no ship address means no proposed shipments, so `ensure_available_shipping_rates` fails). Run `order.next!` and check the validation errors.
+- A variant became discontinued or out of stock: blocks the transition to `complete` (and `resumed`), and the order gets bounced back to the start of checkout via `restart_checkout_flow`. Check `order.line_items.map(&:variant).map(&:purchasable?)`.
 
 ### "Customer redirected to Stripe but never returned"
 
-- PaymentSession is still in `processing` state. Either Stripe's webhook never fired (check `spree_stripe`'s endpoint config) or the customer abandoned. The session has a TTL — `payment_session.expired` fires when it times out.
+- PaymentSession is still in `processing` state. Either Stripe's webhook never fired (check `spree_stripe`'s endpoint config) or the customer abandoned. The session has a TTL (`expires_at`) — core filters timed-out sessions via the `not_expired`/`active` scopes, but the `payment_session.expired` event only fires when something explicitly triggers the `expire` transition (typically the gateway extension reacting to a provider webhook).
 - The redirect-back URL is wrong. Check `spree_stripe`'s configured `return_url`.
 
 ### "Cart total doesn't match what's displayed"
@@ -194,7 +197,7 @@ After complete, the order should be immutable from the customer's side. Admins c
 
 ### "Skip the payment step for a free order"
 
-`order.payment_required?` returns false when `outstanding_balance.zero?`. If your custom flow needs to skip even more aggressively, override `payment_required?`:
+`order.payment_required?` returns false when the order total is zero (`total.to_f > 0.0` is the implementation). If your custom flow needs to skip even more aggressively, override `payment_required?`:
 
 ```ruby
 module Spree::OrderDecorator

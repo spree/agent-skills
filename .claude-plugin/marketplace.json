@@ -1,0 +1,14 @@
+{
+  "name": "spree",
+  "owner": {
+    "name": "Vendo Connect Inc.",
+    "url": "https://spreecommerce.org"
+  },
+  "plugins": [
+    {
+      "name": "spree",
+      "source": "./",
+      "description": "Claude Code support for Spree Commerce projects — 26 skills, the spree-expert subagent, and two safety hooks (block destructive db commands, warn on hardcoded secrets)."
+    }
+  ]
+}

@@ -22,7 +22,7 @@ A promo can have multiple rules (ANDed or ORed via `match_policy`) and multiple 
 ```ruby
 Spree::Promotion.create!(
   name: 'Summer Sale 2026',
-  code: 'SUMMER20',                 # nil for automatic (no code needed)
+  code: 'SUMMER20',                 # required for the default kind: :coupon_code; pass kind: :automatic for no-code promos
   starts_at: Date.new(2026, 6, 1),
   expires_at: Date.new(2026, 9, 1),
   usage_limit: 1000,                # max total redemptions; nil = unlimited
@@ -31,7 +31,7 @@ Spree::Promotion.create!(
 )
 ```
 
-- **Coupon codes:** when `code` is present the customer must enter it. When nil, the promo applies automatically if rules match.
+- **Coupon codes vs automatic:** promotions have a `kind` enum — `coupon_code` (default) or `automatic`. Coupon-code promos require `code` (normalized to lowercase; matched case-insensitively). For promos that apply automatically when rules match, pass `kind: :automatic` — leaving `code` nil without it fails validation, since `kind` defaults to `coupon_code`.
 - **Per-customer limits:** add a `Spree::Promotion::Rules::OneUsePerUser` rule. The customer must be logged in (anonymous orders can't enforce per-customer limits — no identity).
 
 ## Built-in PromotionRule subclasses
@@ -40,7 +40,7 @@ Each rule subclasses `Spree::PromotionRule` and implements `eligible?(promotable
 
 | Rule | Eligibility |
 |---|---|
-| `Country` | The order's billing/shipping country matches |
+| `Country` | The order's shipping country is in the configured ISO code list (defaults to the store's default country) |
 | `Currency` | The cart's currency matches |
 | `CustomerGroup` | The customer is in a specific group |
 | `FirstOrder` | The customer hasn't completed an order before |
@@ -64,7 +64,7 @@ Each action subclasses `Spree::PromotionAction` and implements `perform(options 
 |---|---|
 | `CreateAdjustment` | One adjustment on the whole order (e.g. $10 off the total) |
 | `CreateItemAdjustments` | One adjustment per eligible line item (e.g. 20% off matching products) |
-| `CreateLineItems` | Add a free product to the cart (BOGO) |
+| `CreateLineItems` | Auto-add configured variants to the cart when eligible (added at normal price — pair with a discount action to make them free / BOGO) |
 | `FreeShipping` | Zero out shipping cost |
 
 Discount actions consult a **Calculator** for the amount. `Spree::Calculator::FlatRate` gives a flat amount off; `Spree::Calculator::PercentOnLineItem` gives a percentage off matching items; `Spree::Calculator::FlatPercentItemTotal` gives a percentage off the cart total. The full calculator catalog lives at `Spree::Calculator` subclasses in `spree_core/app/models/spree/calculator/`.
@@ -106,7 +106,9 @@ end
 ```
 
 ```erb
-# app/views/spree/admin/promotions/rules/_minimum_quantity.html.erb
+# app/views/spree/admin/promotion_rules/forms/_minimum_quantity.html.erb
+# The partial name must match the rule's `key` (`api_type` — demodulized, underscored class name by default).
+# Action partials go in app/views/spree/admin/promotion_actions/forms/.
 <div class="row mb-3">
   <%= f.spree_number_field :preferred_quantity, label: Spree.t(:minimum_quantity) %>
 </div>
@@ -220,15 +222,16 @@ Register so the action's "available calculators" picker shows it:
 
 ```ruby
 Rails.application.config.after_initialize do
-  Spree::Promotion::Actions::CreateItemAdjustments.register_calculator(Spree::Calculator::PercentWithCap)
+  Spree.calculators.promotion_actions_create_item_adjustments << Spree::Calculator::PercentWithCap
+  # order-level actions read from Spree.calculators.promotion_actions_create_adjustments
 end
 ```
 
 ## Promotion stacking
 
-Multiple promotions can apply to one order. The cart pipeline runs each eligible action and creates an adjustment per action. Default behavior: **all eligible promotions stack**.
+Multiple promotions can each create adjustments, but Spree does not stack them on the same target. During recalculation `Spree::Adjustable::Adjuster::Promotion` (registered by default in `Rails.application.config.spree.adjusters`) keeps only the single best (largest-discount) eligible promo adjustment per adjustable — order, line item, or shipment — and marks competing promo adjustments `eligible: false`; on a tie the most recently created wins. Promotions targeting *different* adjustables can still combine (e.g. an order-level discount plus a line-item discount on the same order).
 
-If you want exclusive promos (only the best discount applies), implement that in the cart recalculate service — there's no built-in exclusivity flag.
+To change this behavior (e.g. allow stacking on one adjustable), swap in a custom adjuster via `Rails.application.config.spree.adjusters`.
 
 ## Common promotion problems
 
@@ -238,13 +241,13 @@ Walk this list:
 
 1. **Is the code right?** Coupon codes are matched case-insensitively but must otherwise match exactly.
 2. **Within the window?** `promotion.starts_at < Time.current && (promotion.expires_at.nil? || promotion.expires_at > Time.current)`.
-3. **Usage limit not exceeded?** `promotion.usage_count < promotion.usage_limit` (nil limit = unlimited).
+3. **Usage limit not exceeded?** `promotion.usage_limit_exceeded?(order)` should be false (nil limit = unlimited). To inspect manually, `promotion.credits_count` is the number of distinct orders that have used the promo — compare it against `promotion.usage_limit` when a limit is set.
 4. **Every rule eligible?** With `match_policy: 'all'`, every rule must return true. Walk `promotion.rules.map { |r| [r.class.name, r.eligible?(order)] }` to see which fails. Check `r.eligibility_errors.full_messages` for the reason.
-5. **Action ran during recalculate?** Check `order.adjustments.where(source_type: 'Spree::PromotionAction')`. If empty, the action never fired — recalculate to retry.
+5. **Action ran during recalculate?** Check `order.all_adjustments.promotion` — `order.adjustments` only holds order-level adjustments; `CreateItemAdjustments` writes to line items and `FreeShipping` to shipments. If empty, the action never fired — recalculate to retry.
 
 ### "Custom rule isn't showing in admin UI"
 
-Confirm registration ran: `Spree.promotions.rules.include?(Spree::Promotion::Rules::MyRule)` should be true after Rails boot. Confirm the admin partial exists at the expected path. Confirm locale keys under `spree.promotion_rule_types.<underscored_class>.{name,description}` are present.
+Confirm registration ran: `Spree.promotions.rules.include?(Spree::Promotion::Rules::MyRule)` should be true after Rails boot. Confirm the admin partial exists at `app/views/spree/admin/promotion_rules/forms/_<key>.html.erb` (the rule's `key` / `api_type`). Confirm locale keys under `spree.promotion_rule_types.<underscored_class>.{name,description}` are present.
 
 ## Where to read further
 

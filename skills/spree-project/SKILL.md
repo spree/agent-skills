@@ -5,7 +5,37 @@ description: Use when the user is working on a Spree Commerce project — anythi
 
 # Spree Commerce Project
 
-A Rails application powered by [Spree Commerce](https://spreecommerce.org). Project layout (scaffolded by `create-spree-app`):
+A Rails application powered by [Spree Commerce](https://spreecommerce.org).
+
+## Project flavors — detect FIRST, it changes every command
+
+Not every Spree app is a `create-spree-app` project. Check these signals in order before running anything:
+
+| Signal | Flavor | How commands run |
+|---|---|---|
+| `backend/Gemfile` mentions spree + `docker-compose.yml` at root | **create-spree-app project** (5.4+) | `spree <cmd>` — the `@spree/cli` routes into the Docker `web` container |
+| Rails app at root (`config/application.rb`, Gemfile with spree) + `docker-compose.yml` with a Spree image/build | **spree-starter-style Docker app** | `spree <cmd>` if the CLI resolves (`npx spree --version`); else `docker compose exec web <cmd>` |
+| Rails app at root with spree gems, no Docker wiring | **classic Rails app** (typical pre-5.4) | Native, from the app root: `bin/rails …`, `bundle exec rake …` |
+
+Command mapping — Spree CLI form → classic-app native form:
+
+| Task | Spree CLI (Docker) | Classic Rails app |
+|---|---|---|
+| Boot for development | `spree dev` | `bin/dev` (or `bin/rails server`) |
+| Rails console | `spree console` | `bin/rails console` |
+| Install + run migrations | `spree migrate` | `bin/rake spree:install:migrations && bin/rails db:migrate` |
+| Version upgrade | `spree upgrade` | `bundle update <spree gems>`, migrations, then `bin/rake spree:upgrade` |
+| Run a generator | `spree generate api_resource …` | `bin/rails g spree:api_resource …` (spell the `spree:` prefix yourself — auto-prefixing is a CLI feature) |
+| Any rake task | `spree rake <task>` | `bundle exec rake <task>` |
+| Seeds / sample data | `spree seed` / `spree sample-data` | `bin/rails db:seed` / `bin/rails spree:load_sample_data` |
+| Arbitrary command | `spree exec <cmd>` | just run `<cmd>` |
+
+Other flavor differences:
+- **Rails root**: `backend/` in create-spree-app projects, `.` in classic apps. Paths written as `backend/app/…` in these skills mean `app/…` on a classic app.
+- **Local docs** (`node_modules/@spree/docs/dist/`) exist only when the project installs `@spree/docs`. On classic apps, use https://spreecommerce.org/docs/llms.txt instead.
+- The rake tasks themselves (`spree:install:migrations`, `spree:upgrade`, the `spree:model`/`spree:api_resource` generators) ship inside the spree gems and work identically in both flavors — only the invocation wrapper differs. Note `spree:upgrade` and the generators ship in spree_core **5.5+**: a pre-5.5 app gains them after the `bundle update` step of the upgrade, so on old apps run the gem bump first.
+
+## create-spree-app project layout
 
 | Directory | Description |
 |---|---|
@@ -25,9 +55,13 @@ node_modules/@spree/docs/dist/
 │   ├── core-concepts/       Products, orders, payments, inventory
 │   ├── customization/       Decorators, extensions, dependencies, events
 │   ├── admin/               Admin panel customization
+│   ├── storefront/          Storefront building guides
+│   ├── sdk/                 TypeScript SDK documentation
 │   └── tutorial/            Step-by-step guides
-└── api-reference/
-    └── store.yaml           OpenAPI spec — every Store API endpoint
+├── api-reference/
+│   ├── store-api/           Store API v3 guides
+│   └── store.yaml           OpenAPI spec — every Store API endpoint
+└── integrations/            Stripe, Meilisearch, etc.
 ```
 
 Reach for these before guessing from training data. The local docs are the authoritative source for the installed Spree version.
@@ -61,17 +95,24 @@ Quick summary of the priority order:
 `@spree/cli` (installed by `create-spree-app`) wraps the Docker-based dev workflow:
 
 ```bash
-spree dev                          # boot the backend stack
+spree dev                          # run the stack in the foreground (streams logs; Ctrl+C stops web + worker, DBs stay up)
 spree stop                         # tear down
 spree console                      # Rails console
 spree logs                         # follow web container logs
 spree restart                      # restart the Rails process
 
-spree migrate                      # run pending migrations
+spree migrate                      # install engine migrations from gems + db:migrate
 spree generate <name> [args]       # any Spree generator
 spree bundle add <gem>             # add a gem (persists in bundle_cache volume)
 spree rake <task>                  # any rake task
 spree exec <cmd>                   # universal escape hatch
+spree rails <cmd>                  # any bin/rails command
+spree routes                       # show Rails routes
+spree seed                         # seed the database
+spree sample-data                  # load sample products/categories/images
+spree user create                  # create an admin user
+spree api-key create               # create an API key (also: list, revoke)
+spree db:reset                     # drop + recreate + migrate + seed (destructive)
 
 spree upgrade                      # version upgrade
 ```

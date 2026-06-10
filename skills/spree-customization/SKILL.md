@@ -5,6 +5,8 @@ description: Use FIRST when the user is about to customize Spree and the right a
 
 # Spree Customization — Where Does My Code Belong?
 
+> Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
+
 Spree is heavily customizable. The work of any Spree project is mostly customization — wiring in external services, adding custom models, tweaking behavior, extending the admin. The thing that's hard isn't *how* to customize; it's *which pattern* fits a given problem.
 
 This skill is a decision tree. It maps a customization need to the right specific skill — read those for the deep dive. Walk the table top to bottom; the higher options are simpler and survive upgrades better than the lower ones.
@@ -53,6 +55,15 @@ class ErpOrderSyncSubscriber < Spree::Subscriber
 end
 ```
 
+Then register it — subscribers are not auto-discovered:
+
+```ruby
+# config/initializers/spree.rb
+Rails.application.config.after_initialize do
+  Spree.subscribers << ErpOrderSyncSubscriber
+end
+```
+
 → See the **`spree-events-webhooks`** skill for the full event catalog and async/sync behavior.
 
 ### "I need to add a Brand model that products belong to"
@@ -61,6 +72,13 @@ Brand is a brand-new resource with its own API surface. Use the generator:
 
 ```bash
 spree generate api_resource Brand name:string:uniq active:boolean
+```
+
+Add the `brand_id` column to products:
+
+```bash
+spree generate migration AddBrandIdToSpreeProducts brand_id:bigint:index
+spree migrate
 ```
 
 Then add the `belongs_to :brand` to `Spree::Product` via a decorator:
@@ -103,7 +121,7 @@ That's a service swap. Subclass `Spree::Cart::Recalculate` and register your rep
 Spree.cart_recalculate_service = MyApp::Cart::Recalculate
 ```
 
-→ See the **`spree-dependencies`** skill for the full dependency injection pattern, the catalog of 64 core + 233 API injection points, and the `spree:dependencies:list / :overrides / :validate` rake tasks.
+→ See the **`spree-dependencies`** skill for the full dependency injection pattern, the catalog of 70 core + 302 API injection points, and the `spree:dependencies:list / :overrides / :validate` rake tasks.
 
 ### "I need to add a 'Loyalty Points' page to the admin sidebar"
 
@@ -128,14 +146,14 @@ Use the admin partials API to inject a section — no view override required:
 
 ```ruby
 # config/initializers/spree.rb
-Spree.admin.partials.product_form << 'spree/admin/products/_preferred_carrier'
+Spree.admin.partials.product_form << 'spree/admin/products/preferred_carrier'
 ```
 
 Then drop the partial at `app/views/spree/admin/products/_preferred_carrier.html.erb`. Permit the new attribute via:
 
 ```ruby
 Rails.application.config.after_initialize do
-  Spree::PermittedAttributes.product_attributes += [:preferred_carrier]
+  Spree::PermittedAttributes.product_attributes << :preferred_carrier
 end
 ```
 
@@ -175,6 +193,6 @@ These are tempting but wrong — the table above gives you a better answer for e
 
 ## Where to read further
 
-- **Spree's customization docs (the canonical decision tree):** `node_modules/@spree/docs/dist/developer/customization/quickstart.mdx`
+- **Spree's customization docs (the canonical decision tree):** `node_modules/@spree/docs/dist/developer/customization/quickstart.md`
 - **Each specific pattern's deep dive:** the linked `spree-X` skill in the table above
-- **Configuration reference:** `node_modules/@spree/docs/dist/developer/customization/configuration.mdx`
+- **Configuration reference:** `node_modules/@spree/docs/dist/developer/customization/configuration.md`

@@ -1,9 +1,11 @@
 ---
 name: spree-pricing
-description: Use when the user is working with Spree pricing — variant prices, currency-specific pricing, sale/compare-at prices, price lists (5.5), price rules, EU Omnibus compliance (PriceHistory + prior_price), tax-inclusive pricing. Common phrasings include "set price", "compare at price", "sale price", "price list", "multi-currency pricing", "prior price", "Omnibus", "EU pricing law", "lowest price in 30 days", "tax inclusive", "VAT". Provides the price graph and the regulatory bits.
+description: Use when the user is working with Spree pricing — variant prices, currency-specific pricing, sale/compare-at prices, price lists (5.3), price rules, EU Omnibus compliance (PriceHistory + prior_price), tax-inclusive pricing. Common phrasings include "set price", "compare at price", "sale price", "price list", "multi-currency pricing", "prior price", "Omnibus", "EU pricing law", "lowest price in 30 days", "tax inclusive", "VAT". Provides the price graph and the regulatory bits.
 ---
 
 # Spree Pricing
+
+> Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
 
 Pricing in Spree is per-variant, per-currency. Optional layers add price lists (per-customer or per-market), historical tracking (for EU Omnibus compliance), and rule-based variations.
 
@@ -15,9 +17,9 @@ Variant
   │     ├── amount             — what the customer pays (gross or net depending on tax config)
   │     ├── compare_at_amount  — was-price / strikethrough price (sale messaging)
   │     ├── currency
-  │     └── price_list (5.5)   — nil for the default storefront price
+  │     └── price_list (5.3)   — nil for the default storefront price
   ├── PriceHistory × n         — historical amount changes (EU Omnibus)
-  └── PriceRule × n            — conditional price overrides (5.5)
+  └── PriceRule × n            — conditional price overrides (5.3)
 ```
 
 Each Variant has at least one Price per currency the store sells in. The cart pipeline picks the right Price based on `Spree::Current.currency` and the customer's `PriceList` (if any).
@@ -32,13 +34,13 @@ variant.prices.create!(
 )
 ```
 
-For most stores, prices are created via the admin UI (Products → variant edit) or bulk-imported via CSV. The `Spree::Variant#price` accessor returns the Price in the current currency.
+The canonical, idempotent setter is `variant.set_price('USD', 39.99, 49.99)` — it find-or-initializes the base Price for the currency (unlike `prices.create!`, which raises if a USD base price already exists, due to a unique DB index on variant + currency). Note the third argument is `compare_at_amount` and is assigned unconditionally — calling `set_price('USD', 39.99)` clears any existing compare-at price. Read it back with `variant.price_in('USD')`, which returns the base `Spree::Price` for that currency.
+
+For most stores, prices are created via the admin UI (Products → variant edit) or bulk-imported via CSV. `Spree::Variant#price` is deprecated (removed in 6.0) — it returns the base-price amount in the default store's default currency, not a `Spree::Price` in the current currency. Use `variant.price_in('EUR')` (returns the base `Spree::Price` for a currency), `variant.amount_in('EUR')` (BigDecimal amount), or `variant.price_for(currency: 'EUR', user: user)` to get the price resolved through price lists (`Spree::Pricing::Resolver`).
 
 ```ruby
-Spree::Current.currency       # => 'EUR'
-variant.price                 # => Price with currency: 'EUR'
-variant.display_price         # => "€39.99" (Money formatting)
-variant.cost_price            # => internal cost (not customer-facing)
+variant.price_in(Spree::Current.currency)   # => Spree::Price
+variant.cost_price                          # => internal cost (not customer-facing)
 ```
 
 ## Multi-currency pricing
@@ -57,9 +59,9 @@ For bulk currency updates (e.g. "raise all USD prices 10%"):
 Spree::Price.where(currency: 'USD', price_list_id: nil).update_all('amount = amount * 1.1')
 ```
 
-If you have PriceHistory enabled, run `spree rake spree:price_history:seed` afterwards so the change is recorded for Omnibus compliance.
+Note `update_all` bypasses callbacks, so PriceHistory is NOT recorded (and the seed task won't backfill changes — it skips prices that already have history). If you have PriceHistory enabled, use the batched `update!` pattern shown under "Bulk price update" instead, which fires the history callback per record.
 
-## PriceList (5.5)
+## PriceList (5.3)
 
 A PriceList is a named pricing context — "Wholesale", "VIP", "B2B Tier 1". Each PriceList has its own Prices, separate from the default storefront prices.
 
@@ -80,23 +82,23 @@ variant.prices.create!(
 )
 ```
 
-A PriceList is gated by **PriceRule** records attached to it. A customer "qualifies" for a PriceList only when its rules match the pricing context — country, market, customer group, user, or volume. The cart pipeline picks the highest-priority matching PriceList's price; falls back to the default (`price_list: nil`) otherwise.
+A PriceList is gated by **PriceRule** records attached to it. A customer "qualifies" for a PriceList only when its rules match the pricing context — zone, market, customer group, user, or volume. The cart pipeline picks the highest-priority matching PriceList's price; falls back to the default (`price_list: nil`) otherwise.
 
-This is the foundation for B2B pricing tiers, member discounts, and per-market pricing. Pre-5.5 stores used promotions for this — PriceList is cleaner because the price *is* the displayed price (no "20% off at checkout" surprise).
+This is the foundation for B2B pricing tiers, member discounts, and per-market pricing. Pre-5.3 stores used promotions for this — PriceList is cleaner because the price *is* the displayed price (no "20% off at checkout" surprise).
 
-## PriceRule (5.5)
+## PriceRule (5.3)
 
 A PriceRule is a condition gating a PriceList. PriceRule is STI; subclasses live in `Spree::PriceRules::*`:
 
 | Subclass | Matches when… |
 |---|---|
 | `Spree::PriceRules::CustomerGroupRule` | The customer is in a specified CustomerGroup |
-| `Spree::PriceRules::MarketRule` | The order's market is in a specified set of markets |
+| `Spree::PriceRules::MarketRule` | The order's market is in a specified set of markets (5.4) |
 | `Spree::PriceRules::UserRule` | A specific User is logged in |
 | `Spree::PriceRules::VolumeRule` | The line item quantity hits a threshold |
 | `Spree::PriceRules::ZoneRule` | The shipping zone matches |
 
-Each subclass implements `applicable?(context)` where `context` is a `Spree::Pricing::Context` (store, currency, country, user, etc.).
+Each subclass implements `applicable?(context)` where `context` is a `Spree::Pricing::Context` (store, currency, zone, market, user, quantity, date, etc.).
 
 ```ruby
 wholesale = Spree::PriceList.find_by(name: 'Wholesale')
@@ -124,14 +126,17 @@ Spree::PriceHistory.create(
 )
 ```
 
-Every Price change creates a PriceHistory entry. The `Spree::Price#prior_price` method returns the **lowest amount over the last 30 days**:
+Every base-price amount change creates a PriceHistory entry (price-list prices and compare_at-only changes are not tracked; recording requires `Spree::Config[:track_price_history]`). The `Spree::Price#prior_price` method returns the `Spree::PriceHistory` record with the **lowest amount recorded in the last 30 days** (or `nil` if there's no history in that window):
 
 ```ruby
-price.amount             # => 25.00 (current sale price)
-price.prior_price        # => 30.00 (lowest in last 30 days — used as the strikethrough)
+price.amount                # => 25.00 (current sale price)
+price.prior_price           # => #<Spree::PriceHistory amount: 25.00, ...> or nil
+price.prior_price&.amount   # => lowest amount recorded in the window
 ```
 
-The Store API exposes `prior_price` on the Price serializer. EU storefronts display it as the "regular price" alongside the current sale price.
+Note: the price-change callback records the new amount itself, so the just-set sale price is included in the 30-day window and can be the "lowest" returned.
+
+The Store API exposes `prior_price` as an expandable field on product and variant endpoints (`?expand=prior_price`), serialized as a PriceHistory object (`amount`, `amount_in_cents`, `currency`, `display_amount`, `recorded_at`). EU storefronts display it alongside the current sale price.
 
 ### Configuration
 
@@ -172,7 +177,7 @@ Spree supports both modes per Zone / Country:
 
 Configured via `Spree::TaxRate.included_in_price` per rate. The Markets system (5.4+) sets a default per market.
 
-The cart pipeline displays prices according to `Spree::Current.market`'s setting. Editing prices in the admin asks the merchant whether the entered number is gross or net.
+The cart pipeline displays prices according to `Spree::Current.market`'s setting. Prices are entered as-is in the admin — no price form asks gross vs net. The interpretation comes from the tax configuration: `TaxRate.included_in_price` drives the tax math, and the per-market `tax_inclusive` flag (Settings → Markets) records the market-level default.
 
 **EU stores: always gross-stored.** This is what Omnibus requires for transparency. **US stores: always net-stored.** Sales tax is added at the cart level.
 
@@ -185,7 +190,7 @@ Mixing the two (US store selling to EU customers) requires careful Market config
 Walk this list:
 
 1. **Currency mismatch?** `Spree::Current.currency` should be the customer's. Check the Channel / Market config.
-2. **PriceList?** If a PriceList's rules match the pricing context, that PriceList's price wins. Walk `current_store.price_lists.active.each { |pl| pl.price_rules.all?(&:applicable?(...)) }`.
+2. **PriceList?** If a PriceList's rules match the pricing context, that PriceList's price wins. Walk the candidate lists for the request context: `Spree::Current.price_lists` returns the memoized `Spree::PriceList.for_context(Spree::Current.global_pricing_context)` (status active/scheduled, within date range, by position). To check rule matching for a specific customer, build a context and test each list: `ctx = Spree::Pricing::Context.new(currency: 'USD', store: current_store, user: user); Spree::PriceList.for_context(ctx).select { |pl| pl.applicable?(ctx) }`. Or just inspect the resolved price directly: `variant.price_for(currency: 'USD', user: user)`.
 3. **Tax mode?** The amount stored is gross or net depending on the Market — make sure the display logic matches the store setting.
 4. **Cache stale?** Catalog endpoints heavily cache. After price changes, touch the product (`product.touch`) to invalidate.
 
@@ -204,7 +209,7 @@ Spree::Price.where(currency: 'USD', price_list_id: nil).find_in_batches(batch_si
 end
 ```
 
-`find_in_batches` keeps memory bounded; the transaction ensures atomicity per batch. After: run `spree:price_history:seed` if you have PriceHistory enabled, and reindex search if prices affect ranking.
+`find_in_batches` keeps memory bounded; the transaction ensures atomicity per batch. After: no PriceHistory action needed — each `update!` fires the price-history callback automatically (when `Spree::Config[:track_price_history]` is enabled, the default). Reindex search if prices affect ranking.
 
 ### "Display price doesn't match cart total"
 

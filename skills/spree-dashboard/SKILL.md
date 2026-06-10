@@ -29,16 +29,16 @@ Plugins register additions to the dashboard via a single call:
 import { defineDashboardPlugin } from '@spree/dashboard-core/plugin'
 import { Card } from '@spree/dashboard-ui'
 
-function WishlistCount({ product }: { product: { wishlist_count: number } }) {
-  return <Card>Wishlists: {product.wishlist_count}</Card>
+function WishlistCount({ resource }: { resource: { wishlist_count: number } }) {
+  return <Card>Wishlists: {resource.wishlist_count}</Card>
 }
 
 defineDashboardPlugin({
   nav: [
-    { key: 'wishlists', label: 'Wishlists', path: '/wishlists', position: 50 },
+    { key: 'wishlists', label: 'Wishlists', path: '/wishlists', position: 150 },
   ],
   slots: {
-    'product.form_sidebar': [
+    'page.actions': [
       { id: 'wishlist-count', component: WishlistCount, position: 50 },
     ],
   },
@@ -48,12 +48,12 @@ defineDashboardPlugin({
     },
   },
   settingsNav: [
-    { key: 'wishlist-settings', label: 'Wishlists', path: '/wishlists', group: 'integrations' },
+    { key: 'wishlist-settings', label: 'Wishlists', path: '/wishlists', group: 'store' },
   ],
 })
 ```
 
-Each registry uses `useSyncExternalStore` so late registration (after the app has mounted) still re-renders consumers. Plugins can be lazy-loaded.
+The nav, settings-nav, and slot registries use `useSyncExternalStore`, so late registration (after the app has mounted) still re-renders consumers. Table mutations registered before the table's `defineTable` runs are queued and applied when it does — register table columns at bootstrap, before the table page renders. Plugins can be lazy-loaded.
 
 ## What you can extend (the four registries)
 
@@ -64,28 +64,28 @@ Add a top-level sidebar entry that opens a route in your plugin.
 ```tsx
 defineDashboardPlugin({
   nav: [
-    { key: 'reviews', label: 'Reviews', path: '/reviews', icon: ReviewIcon, position: 60 },
+    { key: 'reviews', label: 'Reviews', path: '/reviews', icon: ReviewIcon, position: 150 },
   ],
 })
 ```
 
-`position` controls ordering (lower = earlier). Built-in entries occupy positions 10–90; plugins typically land at 50+. `key` must be unique across all registered nav entries.
+`position` controls ordering (lower = earlier). Built-in entries use 100/200/300… spacing so plugins can slot in between (e.g. 150 lands between the first and second built-in entries; entries without a `position` default to 100). `key` must be unique across all registered nav entries — duplicate keys throw. For relative placement without hardcoding numbers, use `nav.insertBefore(targetKey, entry)` / `nav.insertAfter(targetKey, entry)`.
 
 ### 2. Slots (`slots`)
 
-Slots are named injection points inside dashboard pages where plugins can inject components. The Product edit page exposes a `product.form_sidebar` slot, for example. Add a card to it:
+Slots are named injection points inside dashboard pages where plugins can inject components. The page header on every resource page exposes `page.actions` and `page.actions_dropdown` slots, and `<PageTabs>` exposes a `page.tabs` slot, for example. Dynamic editor slots also exist: `payment_method.{guide,form,actions}.<provider_type>`, `promotion.{rule_form,action_form,rule_summary,action_summary}.<type>`, and `price_list.rule_form.<type>`. Add a card to `page.actions`:
 
 ```tsx
 defineDashboardPlugin({
   slots: {
-    'product.form_sidebar': [
+    'page.actions': [
       { id: 'wishlist-count', component: WishlistCount, position: 50 },
     ],
   },
 })
 ```
 
-The slot component receives the page's subject as a prop (e.g. `{ product }` for product slots, `{ order }` for order slots). Each slot entry needs a unique `id`. The dashboard's source is the truth for what slots exist — search for `<Slot name="..."` in the dashboard source to enumerate them.
+The slot component receives the context the render site passes — for `page.actions` that is `{ resource }` (the page's resource, e.g. the product on the product edit page) — plus optional ambient `permissions`, `store`, and `user` fields declared on the slot context type (not populated yet — they arrive with the SlotProvider, so don't depend on them today). Each slot entry needs a unique `id`. The dashboard's source is the truth for what slots exist — search for `<Slot name="..."` in the dashboard source to enumerate them.
 
 ### 3. Table columns (`tables`)
 
@@ -103,11 +103,11 @@ defineDashboardPlugin({
 })
 ```
 
-Columns can be added (`add`), removed (`remove`), or patched (`update`). For `add` to surface real data, the column key must match a field the resource serializer returns. If you added the field via `spree:api_resource` and a custom serializer attribute, the column will get the data automatically.
+Columns can be added (`add`), removed (`remove`), or patched (`update`). For `add` to surface real data, the column key must match a field the resource serializer returns. To extend a built-in resource's Admin serializer with a new field, see "Adding a column to a table that maps to a field you added" below.
 
 ### 4. Settings sub-nav (`settingsNav`)
 
-Adds entries under Settings → (group). Groups (`general`, `taxes`, `integrations`, etc.) come from the dashboard core; declare a new group via `settingsNavGroups` if needed:
+Adds entries under Settings → (group). Groups (`store`, `payments`, `fulfillment`, `team`) are registered by the dashboard app; declare a new group via `settingsNavGroups` if needed — an entry whose `group` key is not registered is silently dropped from the sidebar:
 
 ```tsx
 defineDashboardPlugin({
@@ -115,20 +115,22 @@ defineDashboardPlugin({
     { key: 'wishlist', label: 'Wishlists', position: 80 },
   ],
   settingsNav: [
-    { key: 'wishlist-settings', label: 'Wishlists', path: '/settings/wishlists', group: 'wishlist' },
+    { key: 'wishlist-settings', label: 'Wishlists', path: '/wishlists', group: 'wishlist' },
   ],
 })
 ```
 
+Settings-nav paths are auto-prefixed with `/$storeId/settings` at render time.
+
 ## Adding a brand-new admin page
 
-The lightest version: register a nav entry, register a route in your plugin's bootstrap, and the dashboard renders your component when the user clicks. For more complex pages (resource list + edit), reuse the dashboard's existing patterns:
+The lightest version: register a nav entry via `defineDashboardPlugin`, then add a file-based route in the host app under `src/routes/_authenticated/$storeId/<path>.tsx` that renders your component (nav paths are auto-prefixed with `/$storeId`). Plugins cannot register routes themselves — routing is file-based TanStack Router owned by the host app; the plugin registries cover nav, settings nav, slots, and table columns only. For more complex pages (resource list + edit), reuse the dashboard's existing patterns:
 
-- **Table page:** Use `<ResourceTable>` from `@spree/dashboard-ui` — handles sort/filter/pagination via the Admin SDK.
+- **Table page:** Use `<ResourceTable>` from `@spree/dashboard-core` — pass a `queryFn` that calls the Admin SDK; it handles sort/filter/pagination.
 - **Form page:** React Hook Form + `<Field>` / `<Input>` / `<FieldError>` primitives. Zod schema for validation.
-- **Data fetching:** TanStack Query via the resource hooks (`useResource(...)` exposed by `@spree/dashboard-core`).
+- **Data fetching:** TanStack Query. For plugin pages, write a small hook that wraps the admin SDK client in `useQuery` (`import { adminClient } from '@spree/dashboard-core'`); for writes, use `useResourceMutation` from `@spree/dashboard-core` — it bundles query invalidation and success/error toasts. The per-resource data hooks (`useProducts`, `useOrder`, …) live in the `@spree/dashboard` app under `src/hooks/`; reuse them when you're customizing the app shell itself (they aren't importable from the published package).
 
-Don't hand-write fetch calls — use the resource hooks. They handle JWT auth, refresh, and error mapping consistently with the rest of the dashboard.
+Don't hand-write fetch calls — go through the admin SDK client (or the resource hooks when working in the app shell). It handles JWT auth, refresh, and error mapping consistently with the rest of the dashboard.
 
 ## Adding a column to a table that maps to a field you added
 
@@ -138,22 +140,30 @@ The flow when you add `wishlist_count` to `Spree::Product`:
 2. Update the Admin serializer so the field appears in API responses:
 
 ```ruby
-# backend/app/serializers/spree/api/v3/admin/product_serializer_decorator.rb
-module Spree::Api::V3::Admin::ProductSerializerDecorator
-  def self.prepended(base)
-    base.attributes :wishlist_count
+# backend/app/serializers/my_app/admin_product_serializer.rb
+module MyApp
+  class AdminProductSerializer < Spree::Api::V3::Admin::ProductSerializer
+    typelize wishlist_count: :number
+    attributes :wishlist_count
   end
-  Spree::Api::V3::Admin::ProductSerializer.prepend self
 end
+
+# backend/config/initializers/spree.rb
+Spree.api.admin_product_serializer = 'MyApp::AdminProductSerializer'
 ```
 
-3. Regenerate the TypeScript type for the new field. If a Lefthook hook is set up it runs automatically on commit; otherwise:
+3. Type the new field in your frontend code via TypeScript declaration merging — the generated SDK types are interfaces precisely so this works:
 
-```bash
-spree rake typelizer:generate
+```ts
+// types/spree.d.ts
+declare module '@spree/admin-sdk' {
+  interface Product {
+    wishlist_count: number
+  }
+}
 ```
 
-Then rebuild the admin SDK so the dashboard sees the new type.
+(`rake typelizer:generate` and the Lefthook hook are Spree-monorepo tooling for regenerating the published SDK types. In your app the task technically exists — the typelizer gem ships it — but it writes into the installed gem's directory tree, never into the `@spree/admin-sdk` package your dashboard consumes, so don't use it. Declaration merging is the supported path.)
 
 4. Now the dashboard plugin can register the column:
 
@@ -178,7 +188,7 @@ The `key` must match the serializer attribute exactly. Sort and filter work if t
 ## What lives where
 
 - **Page-level customization for one app** — write a plugin in your project; the dashboard imports it at bootstrap.
-- **Reusable customization across multiple apps** — package it as an npm package + ship as a Spree extension that auto-registers in development. Same `defineDashboardPlugin` API.
+- **Reusable customization across multiple apps** — package it as an npm package whose entry module calls `defineDashboardPlugin` at import time. Host apps register it with a side-effect import (`import '@my-co/wishlists-plugin'`) in their entry file before the router mounts, and list it in `spreeDashboardPlugin({ plugins: [...] })` in vite.config.ts so Tailwind scans its classes. Keep `@spree/dashboard-core`, `@spree/dashboard-ui`, `react`, `react-dom` as peer dependencies so the registries stay singletons.
 - **Core dashboard behavior change** — that's not extension territory; consider whether the dashboard core needs to expose a new slot or registry. PR upstream.
 
 ## Where to read further

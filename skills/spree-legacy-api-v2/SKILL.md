@@ -34,13 +34,15 @@ Both are **JSON:API** style (https://jsonapi.org/) — strict envelope with `dat
 | Storefront (logged-in customer) | `Authorization: Bearer <oauth_token>` | OAuth2 customer token |
 | Platform (admin) | `Authorization: Bearer <oauth_token>` | OAuth2 admin token |
 
-v2 uses **OAuth2 Doorkeeper** for token issuance — `/spree_oauth/token` endpoint with `password` or `client_credentials` grants. No publishable keys, no secret keys, no scopes.
+v2 uses **OAuth2 Doorkeeper** for token issuance — `/spree_oauth/token` endpoint with `password` or `client_credentials` grants. No publishable keys, no secret keys. OAuth scopes exist but are coarse (`admin`, `write`, `read` — the Platform API requires `read`/`admin` to read and `write`/`admin` to write); nothing like v3's per-resource `read_products`/`write_orders` API-key scopes.
 
 ```bash
 # Get a Platform API token (admin)
 curl -X POST https://my-spree.example.com/spree_oauth/token \
-  -d '{"grant_type":"password","username":"admin@example.com","password":"…"}'
-# => { "access_token": "…", "token_type": "Bearer", "expires_in": 7200, ... }
+  --header "Content-Type: application/x-www-form-urlencoded" \
+  --data "grant_type=password&username=admin@example.com&password=…"
+# => { "access_token": "…", "token_type": "Bearer", "expires_in": 2592000, ... }
+# (tokens last 1 month by default — `access_token_expires_in 1.month`)
 
 # Use it
 curl -H "Authorization: Bearer …" \
@@ -80,9 +82,9 @@ curl -H "Authorization: Bearer …" \
 Compared to v3:
 - v2: raw integer IDs (`"42"`). v3: prefixed IDs (`"prod_…"`).
 - v2: nested `attributes` + `relationships`. v3: flat top-level fields.
-- v2: `include` query param pulls related resources into `included` array. v3: `include` inlines them into the response directly.
-- v2: filters use `filter[name_cont]=…`. v3: same idea but `q[name_cont]=…` (Ransack).
-- v2: sort uses `sort=-created_at`. v3: `q[s]=created_at+desc`.
+- v2: `include` query param pulls related resources into `included` array. v3: `expand` query param inlines them into the response directly (`?expand=variants,media`, dot-nested up to 4 levels).
+- v2 (Platform API): filters use `filter[name_cont]=…`. v3: same idea but `q[name_cont]=…` (Ransack). The Storefront API used fixed per-endpoint filter names instead — see Step 4 below.
+- v2: sort uses `sort=-created_at`. v3: identical — `sort=-created_at` works unchanged (the v3 ResourceController translates `-field` JSON:API notation to Ransack `s` internally).
 
 ### Pagination
 
@@ -132,12 +134,12 @@ The migration is **per-endpoint**. You don't need to flip everything at once; v2
 
 | v2 | v3 |
 |---|---|
-| OAuth2 password grant for customer login | JWT login at `/api/v3/storefront/auth/login` (returns `access_token` + `refresh_token`) |
+| OAuth2 password grant for customer login | JWT login at `/api/v3/store/auth/login` (returns `token` + `refresh_token` + `user`) |
 | OAuth2 client_credentials for admin apps | Secret key (`sk_*`) with scoped permissions |
 | `Authorization: Bearer <token>` | `X-Spree-API-Key: <pk_…\|sk_…>` + optional `Authorization: Bearer <jwt>` |
 | `X-Spree-Order-Token` for guest carts | Still `X-Spree-Token` (renamed) |
 
-For admin apps: generate a secret key via the admin UI (Settings → API keys → Secret keys) with the required scopes. Drop OAuth2 entirely.
+For admin apps: generate a secret key via the admin UI (Settings → Developers → API Keys, key type 'Secret') with the required scopes. Drop OAuth2 entirely.
 
 For customer flows: replace the OAuth2 login call with JWT login. The new flow returns refresh tokens too — see the admin authentication docs for the cookie-based pattern the admin SPA uses.
 
@@ -175,8 +177,8 @@ const variants = response.included.filter(r => r.type === 'variant')
 const product = response   // single endpoint — no envelope
 const name = product.name
 const price = product.price
-const variantIds = product.variant_ids   // direct field
-// With include: response.variants is an array of full variant objects
+const defaultVariantId = product.default_variant_id   // direct field
+// With ?expand=variants: product.variants is an array of full variant objects
 ```
 
 Write a thin adapter if you can't refactor every call site at once:
@@ -195,17 +197,17 @@ function unwrapV2<T>(response: V2Response<T>): T {
 
 | v2 | v3 |
 |---|---|
-| `filter[name_cont]=shirt` | `q[name_cont]=shirt` |
-| `filter[price_gteq]=20` | `q[price_gteq]=20` |
-| `sort=-created_at` | `q[s]=created_at+desc` |
+| `filter[name_cont]=shirt` (Platform API) | `q[name_cont]=shirt` |
+| `filter[price_gteq]=20` (Platform API) | `q[price_gteq]=20` |
+| `sort=-created_at` | `sort=-created_at` (unchanged) |
 
-Predicates (`_eq`, `_cont`, `_gteq`, etc.) are the same — both wrap Ransack underneath. Just the param name differs.
+For the **Platform API**, `filter[...]` keys are Ransack predicates and map 1:1 to v3's `q[...]` — `filter[name_cont]` becomes `q[name_cont]`. The **Storefront API** did not use Ransack: each endpoint had fixed filter names handled by a finder class, so translate them instead — `filter[name]` → `q[name_cont]` (or `q[search]`), `filter[taxons]` → `q[in_categories]`, `filter[price]=10,50` → `q[price_gte]=10&q[price_lte]=50`.
 
-The `@spree/sdk` accepts `filter: { name_cont: ... }` as a typed object and produces `q[name_cont]=...` for you — see `spree-typescript-sdk`.
+The `@spree/sdk` accepts flat Ransack predicates as typed list params — `client.products.list({ name_cont: 'shirt' })` — and produces `q[name_cont]=...` for you — see `spree-typescript-sdk`.
 
 ### Step 5: Switch SDK
 
-If you're using the old `@spree-storefront/spree-storefront-api-v2-sdk` package (JS) or `spree_oauth2_client` (Ruby), replace with `@spree/sdk` + `@spree/admin-sdk`. The new SDKs are typed, have built-in retry, and follow the same protocol the rest of the v3 surface uses.
+If you're using the old `@spree/storefront-api-v2-sdk` package (JS), replace it with `@spree/sdk` (Store API) or `@spree/admin-sdk` (Admin API). The new SDKs are typed, have built-in retry, and follow the same protocol the rest of the v3 surface uses.
 
 ### Step 6: Webhooks (if applicable)
 
@@ -213,7 +215,7 @@ If you receive v2 webhooks: v2 webhooks fire with raw IDs and the legacy payload
 
 ## When v2 will go away
 
-v2 is **frozen, not removed**. There's no announced removal date as of Spree 5.5. New stores should start on v3; existing v2 integrations can keep running indefinitely, but they won't get new features (new fields, new endpoints, new resources land on v3 only).
+v2 is **no longer bundled with `spree_api`**. As of Spree 5.5 it lives in the separate, deprecated [`spree_legacy_api_v2`](https://github.com/spree/spree_legacy_api_v2) gem, which works with Spree 5. To keep an existing v2 integration running, add the gem (`bundle add spree_legacy_api_v2`); on a fresh app also run `bin/rails g spree:legacy_api_v2:install` to install its migrations (apps upgraded from earlier Spree versions already have them). API v2 is slated for removal in the next major release and gets no new features — new fields, endpoints, and capabilities (e.g. Markets, the new pricing engine) land on v3 only.
 
 If you maintain a high-value v2 integration, schedule the migration; you'll only fall further behind otherwise.
 
@@ -222,5 +224,5 @@ If you maintain a high-value v2 integration, schedule the migration; you'll only
 - **v3 API protocol:** `spree-api-v3` skill — the destination.
 - **v3 TypeScript SDKs:** `spree-typescript-sdk` skill.
 - **Adding a custom endpoint on v3:** `spree-resource` skill.
-- **v2 source:** `spree/api/app/controllers/spree/api/v2/` — controllers + serializers (jsonapi-serializer based).
-- **v2 OpenAPI spec:** in older versions of `docs/api-reference/`. Most users should move to the v3 spec at `node_modules/@spree/docs/dist/api-reference/store.yaml`.
+- **v2 source:** the [`spree_legacy_api_v2` gem](https://github.com/spree/spree_legacy_api_v2) — controllers + serializers (jsonapi-serializer based). v2 no longer ships inside `spree_api`.
+- **v2 OpenAPI spec:** `docs/api-reference/storefront.yaml` and `docs/api-reference/platform.yaml`. The v3 spec is `docs/api-reference/store.yaml` (also shipped in the `@spree/docs` npm package at `node_modules/@spree/docs/dist/api-reference/store.yaml`).

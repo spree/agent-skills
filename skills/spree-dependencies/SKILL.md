@@ -1,19 +1,21 @@
 ---
 name: spree-dependencies
-description: Use when the user wants to swap how a core Spree service computes — cart add, cart recalculate, checkout flow, ability checks, payment processing, search, tax, serializers in the API. Common phrasings include "Spree.dependencies", "Spree::Dependencies", "replace Spree::Cart::AddItem", "swap the cart recalculate service", "custom ability", "override an API serializer", "swap a service", "dependency injection in Spree", "spree:dependencies:list", "spree:dependencies:overrides", "spree:dependencies:validate", "what services can I swap". Covers global vs API-level overrides, the introspection rake tasks, and the full catalog of swappable services. For deciding *whether* to swap a service vs use a decorator or subscriber, see the `spree-customization` skill first.
+description: Use when the user wants to swap how a core Spree service computes — cart add, cart recalculate, checkout flow, ability checks, payment processing, search, serializers in the API. Common phrasings include "Spree.dependencies", "Spree::Dependencies", "replace Spree::Cart::AddItem", "swap the cart recalculate service", "custom ability", "override an API serializer", "swap a service", "dependency injection in Spree", "spree:dependencies:list", "spree:dependencies:overrides", "spree:dependencies:validate", "what services can I swap". Covers global vs API-level overrides, the introspection rake tasks, and the full catalog of swappable services. For deciding *whether* to swap a service vs use a decorator or subscriber, see the `spree-customization` skill first.
 ---
 
 # Spree Dependencies (Dependency Injection)
 
+> Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
+
 `Spree.dependencies` is the canonical way to replace a core Spree service with your own implementation — no fork, no monkey-patch, no decorator. You inherit from the Spree default, override the methods you need, and register your class as the dependency. Spree's own code calls your service everywhere it used to call the default.
 
-The core has **64 injection points**; the API has **233 more** for serializers, finders, and per-endpoint services. The full set is documented at `node_modules/@spree/docs/dist/developer/customization/dependencies.mdx`.
+The core has **70 injection points**; the API has **302 more** for serializers, finders, and per-endpoint services. The full set is documented at `node_modules/@spree/docs/dist/developer/customization/dependencies.md`.
 
 ## When to reach for this vs other patterns
 
 | Want to... | Use |
 |---|---|
-| Replace how a core service computes (cart add, cart recalculate, checkout step, ability checks, search, tax, finder) | **Dependency injection** (this skill) |
+| Replace how a core service computes (cart add, cart recalculate, checkout step, ability checks, search, finder) | **Dependency injection** (this skill) |
 | Replace an API serializer everywhere | **Dependency injection** — `Spree.api.<serializer> = MyApp::Foo` |
 | React to something happening after a service runs (sync to ERP, notify) | **Events subscriber** — see `spree-events-webhooks` |
 | Add an association / validation / scope / method to a model | **Decorator** — see `spree-decorators` |
@@ -29,24 +31,27 @@ If Spree gives you a swappable service, **use it**. Decorating `Spree::Cart::Add
 ```ruby
 # app/services/my_app/cart/add_item.rb
 class MyApp::Cart::AddItem < Spree::Cart::AddItem
-  def call(order:, variant:, quantity: nil, metadata: {}, options: {})
+  def call(order:, variant:, quantity: nil, metadata: {}, public_metadata: {}, private_metadata: {}, options: {})
     ApplicationRecord.transaction do
       run :add_to_line_item
       run :handle_stock_reservations            # keep the parent's steps you need
-      run Spree.cart_recalculate_service        # call other dependencies dynamically
       run :update_in_external_system            # your custom step
+      run Spree.cart_recalculate_service        # call other dependencies dynamically
     end
   end
 
   private
 
-  def update_in_external_system(*)
+  def update_in_external_system(order:, line_item:, **rest)
     # Your custom logic
+    success(order: order, line_item: line_item, **rest)
   end
 end
 ```
 
 Inherit from the Spree default. Override `call` if you need to change the step chain; override individual private steps (`add_to_line_item`, `handle_stock_reservations`) if you only need to tweak one piece of behavior.
+
+Every `run` step must return `success(...)` or `failure(...)` — otherwise `Spree::ServiceModule::WrongDataPassed` is raised after the chain. The value you pass to `success` is double-splatted (`**`) into the next step, so it must be a hash whenever another step follows. That's also why the custom step goes *before* `run Spree.cart_recalculate_service` here: `Spree::Cart::Recalculate` ends with `success(line_item)` (a bare LineItem, not a hash), so no `run` step can come after it.
 
 ### Step 2: register the override
 
@@ -76,7 +81,7 @@ When your code needs to call a Spree service that might be overridden by someone
 # ✅ Resolves to the current dependency (default OR override)
 Spree.cart_add_item_service.call(order: order, variant: variant, quantity: 1)
 
-Spree.api.storefront_cart_serializer.new(order).serializable_hash
+Spree.api.cart_serializer.new(order).serializable_hash
 
 # ❌ Bypasses any override another extension or app initializer set
 Spree::Cart::AddItem.call(order: order, variant: variant, quantity: 1)
@@ -86,46 +91,44 @@ This matters for extensions and shared code — using the accessor means your co
 
 ## Global vs API-level overrides
 
-The Store API and Platform API each have their own set of injection points so you can customize one without touching the other. The precedence order:
+The two API surfaces are **Store API v3** and **Admin API v3**. They share core services but have separate serializer injection points, so you can customize one surface without touching the other:
 
-1. **API-specific** (`Spree.api.<storefront|platform>_<name>`)
-2. **Global** (`Spree.<name>`)
-3. **Default** (Spree's bundled class)
-
-You can mix and match:
+- **Serializers** are per-surface: `Spree.api.<resource>_serializer` for the Store API (e.g. `Spree.api.product_serializer`, `Spree.api.cart_serializer`) and `Spree.api.admin_<resource>_serializer` for the Admin API (e.g. `Spree.api.admin_product_serializer`). Admin serializers extend their Store counterparts, so public-field changes propagate automatically.
+- **Services** have a single core-level injection point — `Spree.<name>` (e.g. `Spree.cart_add_item_service`). All v3 endpoints, Store and Admin alike, call the core dependency directly; there is no per-surface service layer.
 
 ```ruby
-# Global swap — affects admin, jobs, custom controllers, anywhere
+# Service swap — affects every caller: Store API, Admin API, jobs, custom code
 Spree.cart_add_item_service = MyApp::CartAddItem
 
-# Storefront API only — takes precedence over the global for that surface
-Spree.api.storefront_cart_add_item_service = MyApp::StorefrontCartAddItem
+# Store API serializer only — Admin API keeps its own
+Spree.api.product_serializer = 'MyApp::ProductSerializer'
+
+# Admin API serializer only
+Spree.api.admin_product_serializer = 'MyApp::Admin::ProductSerializer'
 ```
 
-Storefront API requests use `MyApp::StorefrontCartAddItem`; everything else uses `MyApp::CartAddItem`. The Spree backend ignores the Storefront override outside that surface.
+> **Warning:** `Spree.api` still defines legacy `storefront_*` and `platform_*` injection points (e.g. `Spree.api.storefront_cart_add_item_service`), and they still appear in `spree rake spree:dependencies:list` output under `[API]`. These belonged to the removed API v2 controllers and have no consumers — setting them is a silent no-op and they will be removed in Spree 6. Always use the global `Spree.<name>` service accessors instead.
 
 ## Per-controller overrides
 
-If you only want to swap a service for one specific API action (rather than globally or per-surface), use a controller decorator:
+If you only want to swap a serializer for one specific controller (rather than globally or per-surface), use a controller decorator overriding `serializer_class`:
 
 ```ruby
-# app/controllers/spree/cart_controller_decorator.rb
-module Spree
-  module CartControllerDecorator
-    def resource_serializer
+# app/controllers/spree/api/v3/store/carts_controller_decorator.rb
+module Spree::Api::V3::Store
+  module CartsControllerDecorator
+    def serializer_class
       MyApp::PremiumCartSerializer
     end
-
-    def add_item_service
-      MyApp::PremiumCart::AddItem
-    end
   end
-
-  CartController.prepend(CartControllerDecorator)
 end
+
+Spree::Api::V3::Store::CartsController.prepend Spree::Api::V3::Store::CartsControllerDecorator
 ```
 
-The controller's `resource_serializer` and `<name>_service` methods are themselves overridable hooks — see the controller source for the full list of overridable methods per endpoint.
+Generate the file with `bin/rails g spree:controller_decorator Spree::Api::V3::Store::CartsController`.
+
+The v3 `ResourceController` hooks you can override this way are `model_class`, `serializer_class`, `scope`, `find_resource`, `permitted_params`, and `collection_includes`. There are no per-controller `<name>_service` hooks in API v3 — controllers call the registered dependencies directly, so to swap a service use the global (`Spree.<name>`) injection points described above. (Per-surface `Spree.api.*` points exist only for serializers.)
 
 For the decorator syntax + generator, see the `spree-decorators` skill.
 
@@ -150,8 +153,9 @@ cart_recalculate_service         Spree::Cart::Recalculate [OVERRIDDEN]
 ...
 
 [API]
-storefront_cart_serializer       Spree::Api::V2::Storefront::CartSerializer
-storefront_cart_add_item_service MyApp::CartAddItem [OVERRIDDEN]
+cart_serializer                  Spree::Api::V3::CartSerializer
+admin_product_serializer         Spree::Api::V3::Admin::ProductSerializer
+product_serializer               MyApp::ProductSerializer [OVERRIDDEN]
 ...
 ```
 
@@ -215,7 +219,7 @@ Spree::Dependencies.overridden?(:cart_add_item_service)
 Spree::Dependencies.override_info(:cart_add_item_service)
 # => {value: MyApp::CartAddItem, source: "config/initializers/spree.rb:15", set_at: 2024-01-15 10:30:00}
 
-# Validate — raises Spree::DependencyError on the first bad reference
+# Validate — checks every injection point and raises Spree::DependencyError listing all bad references
 Spree::Dependencies.validate!
 ```
 
@@ -225,7 +229,7 @@ Spree::Dependencies.validate!
 
 The injection points are grouped by domain. The list is too long to enumerate in full; this is the categorical map. Run `spree rake spree:dependencies:list` to see the full set for the installed version.
 
-### Core (64 injection points)
+### Core (70 injection points)
 
 | Category | Examples |
 |---|---|
@@ -235,27 +239,27 @@ The injection points are grouped by domain. The list is too long to enumerate in
 | Order | (order finalization, recalculation, cancellation services) |
 | Shipment | (shipment update, ready, ship, cancel services) |
 | Gift cards | `gift_card_apply_service` |
-| Coupons | (coupon apply, remove services) |
+| Coupons | `coupon_handler` — single handler for apply + remove (`Spree::PromotionHandler::Coupon`) |
 | Tracking numbers | (tracking number generators) |
 | Account | (account create/update services) |
 | Addresses | (address create/update services) |
 | Credit cards | (credit card management) |
 | Classifications | (product-taxon association services) |
 | Line items | (line item create/update/destroy services) |
+| Payments | `payment_create_service`, `payments_handle_webhook_service` |
 | Finders | (record lookup classes — `line_item_by_variant_finder`, etc.) |
-| Search | (search provider — also see `spree-catalog` skill) |
+| Search | `search_product_presenter` (the provider itself is set via `Spree.search_provider=`, not dependencies — see `spree-catalog`) |
 | Sorters / Paginators | (per-resource sort + pagination) |
 | Ability | `ability_class` — the CanCanCan ability class |
 
-### API (233 injection points)
+### API (302 injection points)
 
 | Category | Examples |
 |---|---|
-| v3 Store serializers | `storefront_cart_serializer`, `storefront_product_serializer`, `storefront_order_serializer`, etc. (one per resource) |
+| v3 Store serializers | `cart_serializer`, `product_serializer`, `order_serializer`, etc. (unprefixed, one per resource) |
 | v3 Admin serializers | `admin_product_serializer`, `admin_order_serializer`, etc. |
 | v3 event serializers | Serializers for models that don't yet have Store API endpoints |
-| Platform (v2 legacy) serializers | The full v2 JSON:API serializer set |
-| Per-endpoint services | Per-endpoint overridable services (cart add, checkout advance, etc. — duplicates of the core list, scoped to a single API surface) |
+| Legacy v2 slots (`storefront_*`, `platform_*`) | v2 Storefront/Platform serializer and service keys kept for back-compat, slated for removal in Spree 6 — v3 endpoints never read them (v3 controllers call the core service dependencies like `Spree.cart_add_item_service` directly), and the default `Spree::V2::Storefront::*` serializer classes no longer exist in the tree |
 | Sorters / Paginators / Finders | API-specific sort, pagination, and lookup classes |
 | Coupon code handler | Per-API-surface coupon handler |
 
@@ -303,7 +307,7 @@ class MyApp::Cart::AddItem < Spree::Cart::AddItem
 end
 ```
 
-Spree services include `Spree::ServiceModule::Base` for the `run` step orchestration. Your replacement must inherit (or include that module manually) for the same step-chain behavior to work.
+Spree services `prepend Spree::ServiceModule::Base` for the `run` step orchestration. Your replacement must inherit from the Spree default (or `prepend` that module itself — `include` will not wire the class-level `.call`) for the same step-chain behavior to work.
 
 ### Dropping steps from `call`
 
@@ -331,16 +335,17 @@ end
 
 Stock reservations stop working. Read the parent's `call` and preserve every step you don't have a reason to drop.
 
-### Forgetting to set the dependency in an API context
+### Assuming you need a second, API-level assignment
 
-`Spree.cart_add_item_service = X` overrides core. The Store API will still use its own `storefront_cart_add_item_service` (which itself defaults to the core one). If you want your override to apply to the Storefront API too, set both:
+You don't. A global override applies everywhere, including the v3 Store and Admin APIs:
 
 ```ruby
-Spree.cart_add_item_service                = MyApp::Cart::AddItem
-Spree.api.storefront_cart_add_item_service = MyApp::Cart::AddItem
+Spree.cart_add_item_service = MyApp::Cart::AddItem  # ← this is all you need
 ```
 
-Or rely on the cascade (API falls through to core for any value it hasn't set itself) — but the `spree:dependencies:list` output will *not* show the storefront override in that case, which can mislead a future developer reading the catalog.
+The v3 controllers call `Spree.cart_add_item_service` (the core injection point) directly and resolve it lazily at request time, so an override in `config/initializers/spree.rb` takes effect for API requests too.
+
+The `Spree.api.storefront_*` service points are leftovers from the removed API v2 (marked "Legacy API v2 dependencies — will be removed in Spree 6" in `spree_api/lib/spree/api/dependencies.rb`). Nothing consumes them anymore — assigning `Spree.api.storefront_cart_add_item_service` is a no-op. Don't rely on their "cascade" either: their proc defaults are snapshotted once, when `Spree::Api::Dependencies` is instantiated in an engine initializer that runs *before* your app's initializers — so core overrides set in `config/initializers/spree.rb` never propagate into them. They'll still appear in `spree:dependencies:list` output showing the stale boot-time value; ignore them.
 
 ### Initializer load order
 
@@ -348,9 +353,9 @@ Dependency overrides go in `config/initializers/spree.rb`. Multiple extensions s
 
 ## Where to read further
 
-- **Canonical docs:** `node_modules/@spree/docs/dist/developer/customization/dependencies.mdx`
+- **Canonical docs:** `node_modules/@spree/docs/dist/developer/customization/dependencies.md`
 - **Core injection point list:** `Spree::Core::Dependencies::INJECTION_POINTS_WITH_DEFAULTS` in `spree_core/lib/spree/core/dependencies.rb`
-- **API injection point list:** `Spree::Api::Dependencies::INJECTION_POINTS_WITH_DEFAULTS` in `spree_api/lib/spree/api/dependencies.rb`
+- **API injection point list:** `Spree::Api::ApiDependencies::INJECTION_POINTS_WITH_DEFAULTS` in `spree_api/lib/spree/api/dependencies.rb` (`Spree::Api::Dependencies` is an instance of this class)
 - **`Spree::ServiceModule::Base`** — the base class behind the `run :step_name` orchestration
 - **For deciding whether to swap a service vs use events vs decorate:** the `spree-customization` skill
 - **For installing third-party Spree gems that ship dependency overrides:** the `spree-extensions` skill

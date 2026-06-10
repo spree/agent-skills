@@ -26,11 +26,18 @@ Spree::Subscribers each receive the event
 Your subscriber: sync to ERP, send email, etc.
 ```
 
-Subscribers fire **after the transaction commits**. If the database write fails, the subscriber never runs.
+Automatic lifecycle events (`*.created`, `*.updated`, `*.deleted`) fire after the transaction commits — if the write fails, those subscribers never run. Custom events published via `publish_event(...)` (including `order.completed`) are dispatched at the call site, which may be inside an open transaction: sync subscribers run inline, and async subscriber jobs are enqueued immediately — possibly before the commit. Don't assume the surrounding write has committed.
 
 ### Writing a subscriber
 
-Drop the file under `app/subscribers/` — Spree auto-registers anything there at Rails boot. No initializer needed.
+Put the class anywhere autoloadable (e.g. `app/subscribers/`), then register it in an initializer:
+
+```ruby
+# config/initializers/event_subscribers.rb
+Rails.application.config.after_initialize do
+  Spree.subscribers << OrderCompleteSubscriber
+end
+```
 
 ```ruby
 # app/subscribers/order_complete_subscriber.rb
@@ -124,7 +131,7 @@ Create Spree::WebhookDelivery (queued)
   ↓
 Spree::WebhookDeliveryJob (Sidekiq) → POST to endpoint URL
   ↓
-On failure: retry with exponential backoff
+On failure: delivery recorded as failed (manual redeliver available)
 On 15 consecutive failures: auto-disable endpoint
 ```
 
@@ -166,9 +173,8 @@ X-Spree-Webhook-Event: order.completed
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "name": "order.completed",
-  "store_id": 1,
   "created_at": "2026-06-08T12:00:00Z",
-  "payload": {
+  "data": {
     "id": "or_m3Rp9wXz",
     "number": "R123456789",
     "total": "129.99",
@@ -227,7 +233,7 @@ function verifyWebhook(req: Request): boolean {
 
 ### Retry + auto-disable
 
-Failed deliveries (timeout, 5xx, connection error) are retried with exponential backoff via Sidekiq. After **15 consecutive failures**, the endpoint auto-disables and an email goes to store staff (`Spree::WebhookMailer.endpoint_disabled`).
+Failed deliveries (timeout, 5xx, connection error) are recorded on the delivery record — Spree does **not** automatically retry a failed delivery. Retry manually with `delivery.redeliver!` (creates a fresh delivery and queues it), the admin UI's redeliver button on the delivery page, or `POST /api/v3/admin/webhook_endpoints/:webhook_endpoint_id/deliveries/:id/redeliver`. After **15 consecutive failures**, the endpoint auto-disables and an email goes to store staff (`Spree::WebhookMailer.endpoint_disabled`).
 
 Re-enable via `endpoint.enable!` or by toggling `active: true` in the admin UI. A successful delivery resets the failure counter.
 
@@ -324,6 +330,7 @@ Payment **setup** sessions (saving a payment method without charging) fire the s
 | Event | When |
 |---|---|
 | `import.completed` | Import job finished |
+| `import.progress` | Progress checkpoint during large imports (emitted every 10th completed row group) |
 | `import_row.completed` | Single row imported successfully |
 | `import_row.failed` | Single row failed |
 
@@ -342,9 +349,16 @@ Payment **setup** sessions (saving a payment method without charging) fire the s
 | `newsletter_subscriber.subscription_requested` | Customer requested a subscription (pending double opt-in) |
 | `newsletter_subscriber.verified` | Customer confirmed the subscription |
 
+### Customer
+
+| Event | When |
+|---|---|
+| `customer.password_reset_requested` | Customer requested a password reset email |
+| `customer.password_reset` | Customer successfully reset their password |
+
 ### Automatic lifecycle events
 
-Models that include `publishes_lifecycle_events` emit `<model_singular>.created`, `<model_singular>.updated`, `<model_singular>.deleted` automatically on every save. Examples (5.5):
+Models that include `publishes_lifecycle_events` emit `<model_singular>.created`, `<model_singular>.updated`, `<model_singular>.deleted` automatically after the create, update, and destroy transactions commit (the `.deleted` payload is captured before destroy). Examples (5.5):
 
 - `payment.created`, `payment.updated`, `payment.deleted`
 - `shipment.created`, `shipment.updated`, `shipment.deleted`
@@ -431,7 +445,7 @@ class PaymentFailureSubscriber < Spree::Subscriber
 
   def handle(event)
     order = Spree::Order.find_by_prefix_id(event.payload['order_id'])
-    Slack.notify("Payment failed for #{order.number}: #{event.payload['reason']}")
+    Slack.notify("Payment failed for #{order.number} (session #{event.payload['id']})")
   end
 end
 ```
@@ -456,7 +470,7 @@ end
 1. Registered? `Spree.subscribers.include?(MySubscriber)` should be true.
 2. Event name matches? `subscribes_to 'order.completed'` — exact string match.
 3. Transaction committed? Subscribers run after commit; if the save raises, they don't fire.
-4. Async-only failure? Check Sidekiq's `EventSubscriberJob` queue for failures.
+4. Async-only failure? Check `Spree::Events::SubscriberJob` failures in your job backend (queued on `Spree.queues.events`, `:default` by default).
 
 ### "My webhook endpoint isn't receiving anything"
 
@@ -477,7 +491,7 @@ Almost always one of:
 ## Where to read further
 
 - **Subscriber base class:** `Spree::Subscriber` source.
-- **Customization docs:** `node_modules/@spree/docs/dist/developer/customization/events.mdx`.
+- **Events docs:** `node_modules/@spree/docs/dist/developer/core-concepts/events.md`; **Webhooks docs:** `node_modules/@spree/docs/dist/developer/core-concepts/webhooks.md`; **Per-event payload schemas:** `node_modules/@spree/docs/dist/api-reference/webhooks-events.md`.
 - **Webhook source:** `Spree::WebhookEndpoint`, `Spree::WebhookDelivery`, `Spree::Webhooks::DeliverWebhook`, `Spree::WebhookEventSubscriber`.
 - **Admin UI:** Settings → Webhooks (manages endpoints, view delivery history with response codes/bodies, replay failed deliveries).
 - **For the API surface:** see the `spree-api-v3` skill — webhook endpoints have full CRUD via `/api/v3/admin/webhook_endpoints`.

@@ -17,8 +17,7 @@ These must be set on every Spree deployment:
 | `DATABASE_URL` | Yes | PostgreSQL connection URL. `postgres://user:pass@host:5432/spree_production`. |
 | `REDIS_URL` | Yes | Used for caching, Sidekiq, ActionCable. `redis://host:6379/0`. |
 | `RAILS_ENV` | Yes | `production` for production. Don't deploy `development`. |
-| `RAILS_LOG_TO_STDOUT` | Recommended | Most cloud platforms aggregate from stdout — set to any truthy value. |
-| `RAILS_SERVE_STATIC_FILES` | Conditional | Set when not behind a reverse proxy serving `/public`. Heroku/Render handle this; bare-metal may not. |
+| `RAILS_LOG_TO_STDOUT` | Not needed | spree-starter logs to stdout unconditionally — this variable is never read. Use `RAILS_LOG_LEVEL` (default `info`) to tune verbosity. |
 | `PORT` | Conditional | Web server port. Platform-dependent — Heroku/Render inject; K8s expects container's. |
 
 ### Optional but common
@@ -26,22 +25,24 @@ These must be set on every Spree deployment:
 | Variable | Notes |
 |---|---|
 | `REDIS_CACHE_URL` | Separate Redis DB for `Rails.cache`. Falls back to `REDIS_URL`. Use a separate instance in production so cache evictions don't hit Sidekiq. |
-| `RAILS_MAX_THREADS` | Puma threads per worker. Default 5; tune based on DB pool size. |
+| `RAILS_MAX_THREADS` | Puma threads per worker. Default 3; tune based on DB pool size. |
 | `WEB_CONCURRENCY` | Puma worker count. Default 1; increase for multi-core. |
-| `RAILS_FORCE_SSL` | Force HTTPS at the Rails layer. Most platforms terminate SSL at the LB instead — leave false there. |
+| `RAILS_FORCE_SSL` | Force HTTPS at the Rails layer (HTTP→HTTPS redirects, HSTS, secure cookies). **Default: on** — set `RAILS_FORCE_SSL=false` only when running without TLS (e.g. local Docker; spree-starter's docker-compose.yml does this). Safe to leave on behind SSL-terminating load balancers because `RAILS_ASSUME_SSL` marks proxied requests as HTTPS. |
+| `RAILS_ASSUME_SSL` | Tells Rails it runs behind an SSL-terminating reverse proxy, so requests are treated as HTTPS. **Default: on** — set `false` only when there's no SSL anywhere (local dev, non-SSL proxy). |
 | `RAILS_HOST` | The public hostname. Used in email links and absolute URLs. |
 
 ### Email (SMTP)
 
 | Variable | Notes |
 |---|---|
-| `SMTP_HOST` | When set, enables SMTP delivery. Otherwise emails are logged. |
+| `SMTP_HOST` | When set, enables SMTP delivery. If unset, dev opens emails via `letter_opener`; production has no fallback — deliveries fail. |
 | `SMTP_PORT` | Typically 587 (STARTTLS) or 465 (TLS). |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | Provider credentials. |
 | `SMTP_FROM_ADDRESS` | Default sender. |
-| `SMTP_AUTHENTICATION` | Usually `plain`. Provider-specific. |
 
-If `SMTP_HOST` is unset, ActionMailer uses the `letter_opener_web` gem in dev (saves emails to disk) and logs them in production. Many merchants use Postmark / SendGrid / Resend — set the SMTP vars and you're done.
+Authentication is hardcoded to `plain` (with STARTTLS) in spree-starter's production.rb — edit that file if your provider needs a different mechanism.
+
+If `SMTP_HOST` is unset, dev uses the `letter_opener` gem (emails open in the browser instead of being sent). In production there is no fallback: no delivery method is configured, so ActionMailer stays on Rails' default `:smtp` pointing at localhost:25 and deliveries fail unless a local MTA is running — always set the SMTP vars in production. (Note: the official env-var docs claim emails are "logged to stdout" when SMTP_HOST is unset; the spree-starter code does not do this.) Many merchants use Postmark / SendGrid / Resend — set the SMTP vars and you're done.
 
 ### File storage (ActiveStorage)
 
@@ -69,7 +70,7 @@ If `MEILISEARCH_URL` is unset, Spree uses the Database search provider — fine 
 
 | Variable | Notes |
 |---|---|
-| `SENTRY_DSN` | Spree ships Sentry integration. When set, exceptions report to Sentry automatically. |
+| `SENTRY_DSN` | spree-starter ships Sentry integration (sentry-ruby/rails/sidekiq + an initializer gated on this var). When set, exceptions report to Sentry automatically. Non-starter apps must add the gems + initializer themselves. |
 
 ## The Sidekiq deployment
 
@@ -87,23 +88,38 @@ Run at least one worker process. For high-traffic stores, run multiple worker pr
 
 ### Queue weights matter
 
-See the `spree-performance` skill for the full discussion. Minimum production-grade setup:
+See the `spree-performance` skill for the full discussion. Queue names must match your app's `Spree.queues.*` mapping — out of the box every Spree queue maps to `:default`; spree-starter overrides them to `spree_`-prefixed names in `config/initializers/spree.rb`. Any queue missing from the worker's list never gets processed. Using spree-starter's naming (its shipped `config/sidekiq.yml` is the safe baseline — adjust weights, don't drop queues):
 
 ```yaml
 # config/sidekiq.yml
 :queues:
-  - [payment_webhooks, 5]
-  - [events, 4]
+  - [spree_payment_webhooks, 5]
+  - [mailers, 4]
+  - [spree_events, 4]
   - [default, 3]
-  - [search, 2]
-  - [images, 1]
+  - [spree_webhooks, 3]
+  - [spree_imports, 2]
+  - [spree_exports, 2]
+  - [spree_search, 2]
+  - [spree_products, 2]
+  - [spree_variants, 2]
+  - [spree_taxons, 2]
+  - [spree_stock_location_stock_items, 2]
+  - [spree_coupon_codes, 2]
+  - [spree_addresses, 2]
+  - [spree_gift_cards, 2]
+  - [spree_reports, 2]
+  - [spree_api_keys, 2]
+  - [spree_images, 1]
+  - [active_storage_analysis, 1]
+  - [active_storage_purge, 1]
 ```
 
 Payment webhooks block the customer (they're waiting for the redirect-back); image processing is fine to lag. Without weights, image jobs flood and delay payment events.
 
 ### Sidekiq Pro / Enterprise
 
-Not required, but if your store needs cron scheduling (for `spree:price_history:prune`, `spree:upgrade`, etc.), use Sidekiq-Cron (free) or Sidekiq Enterprise's built-in scheduling.
+Not required. But every production store does need a job scheduler: `Spree::StockReservations::ExpireJob` must run periodically (every minute recommended) — Spree does not auto-schedule it, and without it expired checkout stock-reservation rows accumulate indefinitely (availability checks already ignore them; the job exists to clean up the table). Add `spree:price_history:prune` as housekeeping. Use Sidekiq-Cron (free) or Sidekiq Enterprise's built-in scheduling. (`spree:upgrade` is not a cron job — it belongs in the release phase, covered below.)
 
 ## The release-phase command
 
@@ -111,7 +127,7 @@ After every deploy, run database migrations AND the upgrade rake task. On Heroku
 
 ```
 # Procfile
-release: bundle exec rake db:migrate spree:install:migrations && bundle exec rake spree:upgrade
+release: bundle exec rake spree:install:migrations db:migrate && bundle exec rake spree:upgrade
 ```
 
 On Render:
@@ -122,7 +138,7 @@ services:
   - type: web
     name: spree-web
     autoDeploy: true
-    preDeployCommand: bundle exec rake db:migrate spree:install:migrations && bundle exec rake spree:upgrade
+    preDeployCommand: bundle exec rake spree:install:migrations db:migrate && bundle exec rake spree:upgrade
 ```
 
 On K8s, use an init container or a Helm post-install hook:
@@ -131,7 +147,7 @@ On K8s, use an init container or a Helm post-install hook:
 initContainers:
   - name: migrate
     image: my-spree-image:latest
-    command: ["bin/sh", "-c", "bundle exec rake db:migrate spree:install:migrations && bundle exec rake spree:upgrade"]
+    command: ["/bin/sh", "-c", "bundle exec rake spree:install:migrations db:migrate && bundle exec rake spree:upgrade"]
 ```
 
 `spree:upgrade` walks every eligible upgrade manifest for the installed Spree version. It's **idempotent** — re-running on an already-upgraded app is a safe no-op. See the `spree-upgrade` skill.
@@ -199,7 +215,7 @@ And run migrations via the release-phase command above.
 - ConfigMap for non-secret env, Secret for `SECRET_KEY_BASE`, `DATABASE_URL`, `REDIS_URL`, S3 creds.
 - HorizontalPodAutoscaler on the web Deployment based on CPU + request count.
 - Liveness probe at `/up` (Rails built-in health endpoint, returns 200 when Rails booted).
-- Readiness probe checks DB connectivity — point at a custom endpoint that does `ActiveRecord::Base.connection.active?` or use `/up` (Spree adds DB check there in 5.4+).
+- Readiness probe checks DB connectivity — point at a custom endpoint that does `ActiveRecord::Base.connection.active?`. Don't reuse `/up` here: Rails' built-in health check never touches the database (and Spree does not extend it in any version).
 
 ### Plain Docker (single host)
 
@@ -209,21 +225,22 @@ And run migrations via the release-phase command above.
 
 ## Common deployment problems
 
-### "Site loads but admin shows 'Spree is not configured'"
+### "Every page 404s (ActiveRecord::RecordNotFound) right after deploy"
 
-You don't have a Store record. Run `bin/rails db:seed` or create one manually:
+You don't have a Store record — Spree raises `ActiveRecord::RecordNotFound` from a before_action when no `Spree::Store` exists (rendered as a 404 in production). Run `bin/rails db:seed` or create one manually:
 ```ruby
-Spree::Store.create!(name: 'My Store', url: ENV['RAILS_HOST'], code: 'my-store', default_currency: 'USD', default: true)
+Spree::Store.create!(name: 'My Store', url: ENV['RAILS_HOST'], code: 'my-store', mail_from_address: 'no-reply@example.com', default_currency: 'USD', default: true)
 ```
 
 ### "Sidekiq dashboard returns 401"
 
-The dashboard at `/sidekiq` is auth-protected by default. Configure access in `backend/config/routes.rb`:
+The dashboard at `/sidekiq` is auth-protected by default. spree-starter already mounts it in `config/routes.rb` (app root — there is no `backend/` directory):
 ```ruby
-authenticate :spree_admin_user do
+authenticate :spree_admin_user, ->(admin_user) { admin_user.spree_admin? } do
   mount Sidekiq::Web => '/sidekiq'
 end
 ```
+A 401 (or redirect to sign-in) means the mount is working: sign in at `/admin` first, and note the user must also have the admin role (`spree_admin?`) — a signed-in non-admin is rejected too. Only add this block yourself if your app wasn't generated from spree-starter.
 
 ### "Image uploads work but images don't display"
 
@@ -235,7 +252,7 @@ ActiveStorage::Blob.first.url                       # should return a signed URL
 
 ### "Webhooks aren't firing"
 
-Sidekiq worker isn't running, OR the `events` queue isn't in the worker's queue list. Confirm with `Sidekiq.redis { |r| r.lrange('queue:events', 0, -1) }`.
+Sidekiq worker isn't running, OR the `spree_events` / `spree_webhooks` queues aren't in the worker's queue list. Confirm with `Sidekiq.redis { |r| [r.lrange('queue:spree_events', 0, -1), r.lrange('queue:spree_webhooks', 0, -1)] }` (queue names come from `Spree.queues.*` in `config/initializers/spree.rb`).
 
 ### "Search returns nothing after deploy"
 
@@ -245,6 +262,6 @@ Meilisearch index wasn't built. Run `bundle exec rake spree:search:reindex`. On 
 
 - **Spree-starter Dockerfile + docker-compose:** github.com/spree/spree-starter — reference production-ready Docker setup.
 - **Deployment docs:** `https://spreecommerce.org/docs/developer/deployment` — platform-specific guides.
-- **Env vars:** `backend/.env.example` — the full list with comments.
+- **Env vars:** `.env.example` at the app root, and the Environment Variables page at `https://spreecommerce.org/docs/developer/deployment/environment_variables`.
 - **Sidekiq tuning:** the `spree-performance` skill.
 - **Spree upgrades in production:** the `spree-upgrade` skill — release-phase command pattern.

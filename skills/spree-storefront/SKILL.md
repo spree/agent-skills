@@ -39,7 +39,7 @@ const spree = createClient({
 
 // List products
 const { data, meta } = await spree.products.list({
-  expand: ['images', 'default_variant'],
+  expand: ['media', 'default_variant'],
 })
 
 // Get a single product by slug or prefixed ID
@@ -56,7 +56,7 @@ await spree.carts.items.create(cart.id, {
 ```
 
 The SDK includes:
-- Full TypeScript types generated from the Spree serializers (`StoreProduct`, `StoreOrder`, etc.)
+- Full TypeScript types generated from the Spree serializers (`Product`, `Order`, `Cart`, etc.)
 - Runtime Zod schemas in `@spree/sdk/zod` if you want validation
 - Automatic retry with exponential backoff
 - Ransack query param transformation
@@ -110,20 +110,20 @@ import { spree } from '@/lib/spree'
 
 export default async function ProductPage({ params }: { params: { slug: string } }) {
   const product = await spree.products.get(params.slug, {
-    expand: ['default_variant', 'variants', 'images', 'categories'],
+    expand: ['default_variant', 'variants', 'media', 'categories'],
   })
 
   return (
     <main>
       <h1>{product.name}</h1>
-      <img src={product.images?.[0]?.url} alt="" />
+      <img src={product.media?.[0]?.large_url ?? undefined} alt={product.media?.[0]?.alt ?? ''} />
       <AddToCartButton variantId={product.default_variant_id} />
     </main>
   )
 }
 ```
 
-The v3 Store API uses **flat responses** — `product.name`, not `product.data.attributes.name`. Related records appear as either ID fields (e.g. `default_variant_id`) or, when expanded, as nested objects (e.g. `product.default_variant`, `product.images[]`).
+The v3 Store API uses **flat responses** — `product.name`, not `product.data.attributes.name`. Related records appear as either ID fields (e.g. `default_variant_id`) or, when expanded, as nested objects (e.g. `product.default_variant`, `product.media[]`).
 
 ### Client-side cart
 
@@ -136,22 +136,22 @@ import useSWR from 'swr'
 export function MiniCart({ cartId, token }: { cartId: string; token: string }) {
   const { data: cart } = useSWR(
     ['cart', cartId],
-    () => spree.carts.get(cartId, {}, { spreeToken: token })
+    () => spree.carts.get(cartId, { spreeToken: token })
   )
   if (!cart) return null
-  return <span>{cart.line_items.length} items</span>
+  return <span>{cart.items.length} items</span>
 }
 ```
 
 ### Checkout
 
-The Store API exposes payment sessions for the checkout flow. Each payment provider has its own session creation endpoint (Stripe, Adyen, PayPal). The pattern:
+The Store API exposes payment sessions for the checkout flow — a single, provider-agnostic endpoint that works with any session-based gateway (Stripe, Adyen, PayPal); the provider is selected via `payment_method_id`. The pattern:
 
 1. Customer hits checkout — `POST /api/v3/store/carts/:cart_id/payment_sessions` with a payment method choice (cart token in `X-Spree-Token` header).
 2. Backend returns a session with provider-specific data (Stripe Checkout URL, Adyen drop-in token, etc.).
 3. Storefront redirects to the provider OR renders the provider's embedded form.
 4. Customer completes — provider posts back to the Spree backend, which fires `payment_session.completed` events.
-5. Storefront polls or webhook-listens for completion, then transitions cart → order.
+5. Storefront calls `spree.carts.paymentSessions.complete(cartId, sessionId, { session_result: 'success' }, options)` once the customer confirms, then `spree.carts.complete(cartId, options)` to get the Order — or relies on the provider webhook, in which case the backend completes the cart → order transition automatically.
 
 The `spree_stripe` / `spree_adyen` / `spree_paypal_checkout` gems ship reference checkout flows. Don't roll your own unless you're integrating a new provider.
 
@@ -175,10 +175,10 @@ export async function POST(req: Request) {
   const event: WebhookEvent = JSON.parse(body)
   switch (event.name) {
     case 'order.completed':
-      await sendCustomThankYouEmail(event.payload)
+      await sendCustomThankYouEmail(event.data)
       break
     case 'order.shipped':
-      await pushShippingNotification(event.payload)
+      await pushShippingNotification(event.data)
       break
   }
 
@@ -212,7 +212,7 @@ The rule: **anything customer-visible is the storefront. Anything that touches d
 - **Cart tokens are not credentials** — they identify a cart, not a user. But they grant cart access, so treat them like a session token: HTTPS only, set as an httpOnly cookie when possible.
 - **Cache aggressively but invalidate on cart/auth changes.** Product catalog can sit in CDN; cart calls must always hit fresh.
 - **Pricing displayed must match what the API will charge.** Don't compute totals client-side. Always pull the cart's `total` from the API after add/remove operations — the backend applies promotions, taxes, shipping rules.
-- **i18n is the storefront's job.** The Store API returns translated strings via the `Accept-Language` header. Pass it on every request: `headers: { 'Accept-Language': locale }`.
+- **i18n is the storefront's job.** The Store API returns translated strings based on the `x-spree-locale` header (or a `locale` query param) — not `Accept-Language`. Set it via the SDK: `createClient({ ..., locale })` for a default, or pass `{ locale }` in per-request options; the SDK sends it as `x-spree-locale`.
 
 ## Where to read further
 

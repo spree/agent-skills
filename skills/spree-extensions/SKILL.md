@@ -1,9 +1,11 @@
 ---
 name: spree-extensions
-description: Use when the user wants to install a specific third-party Spree gem (Stripe, Adyen, PayPal, i18n, search, social login, etc.), build their own Spree extension to share across apps, or swap a core Spree service via `Spree.dependencies`. Common phrasings include "add Stripe", "install spree_X", "what payment gateways", "create a Spree extension", "build a gem for Spree", "spree_dev_tools", "Spree.dependencies", "service swap". For deciding which customization pattern to use, see the `spree-customization` skill first — extensions are option 4 on a 6-option decision tree and most single-app work doesn't need one.
+description: Use when the user wants to install a specific third-party Spree gem (Stripe, Adyen, PayPal, i18n, search, social login, etc.), build their own Spree extension to share across apps, or swap a core Spree service via `Spree.dependencies`. Common phrasings include "add Stripe", "install spree_X", "what payment gateways", "create a Spree extension", "build a gem for Spree", "spree_dev_tools", "Spree.dependencies", "service swap". For deciding which customization pattern to use, see the `spree-customization` skill first — extensions are the last two rows of its decision tree and most single-app work doesn't need one.
 ---
 
 # Spree Extensions
+
+> Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
 
 This skill covers two distinct things: **installing a third-party Spree gem** (`spree_stripe`, `spree_i18n`, etc.) and **building your own extension** to share across multiple Spree apps. For single-app customization (the 99% case), use the `spree-customization` skill to find the right pattern — usually it's a subscriber, dependency injection, or a decorator, not a gem.
 
@@ -11,21 +13,21 @@ Spree extensions are Rails engines packaged as gems. They mount into the host Ra
 
 ## Installing an extension
 
-Three steps. Same pattern for every Spree extension.
+Three steps. Same pattern for every Spree extension. Requires the ejected dev stack: fresh `create-spree-app` projects run a prebuilt image where `backend/` is not mounted into the container — run `spree eject` once first to switch to the bind-mounted dev compose.
 
 ```bash
 # 1. Add to Gemfile
-echo "gem 'spree_i18n'" >> backend/Gemfile
+echo "gem 'spree_reviews'" >> backend/Gemfile
 
 # 2. Install the gem
 spree bundle install
 
 # 3. Run the extension's install generator
-spree rails g spree_i18n:install
+spree rails g spree_reviews:install
 ```
 
 The install generator is a **convention** — every Spree extension provides one at `<gem_name>:install`. It typically:
-- Copies migrations into your app (`db/migrate/<ts>_<name>.spree.rb`)
+- Copies migrations into your app (`db/migrate/<ts>_<name>.<gem_name>.rb`)
 - Adds an initializer (`config/initializers/<gem_name>.rb`)
 - Registers itself with `Spree.dependencies` or `Spree.subscribers` if needed
 - Sometimes copies admin views or installs admin slot extensions
@@ -34,7 +36,7 @@ After the install generator runs, apply migrations and restart:
 
 ```bash
 spree migrate
-spree restart
+spree dev                 # Ctrl+C the running one first; `spree restart` does not reload Gemfile changes
 ```
 
 ## Payment-provider gems bundled with `create-spree-app`
@@ -69,7 +71,7 @@ Each extension links to its GitHub repo. Compatibility is per-extension-version 
 
 ## `spree_dev_tools` — first install on any project
 
-`spree_dev_tools` provides factories and helpers used by every Spree gem's own test suite. Add it to the development and test groups:
+`spree_dev_tools` packages Spree's test stack for host apps (RSpec, Factory Bot, Capybara, DatabaseCleaner) and loads the factories and helpers that ship inside `spree_core` — Spree's own gems wire those dependencies directly and don't use this gem. Projects scaffolded with `create-spree-app` already include it in the `:development, :test` group; add it yourself only on apps that weren't:
 
 ```ruby
 # backend/Gemfile
@@ -80,11 +82,12 @@ end
 
 ```bash
 spree bundle install
+spree rails g spree_dev_tools:install   # copies helpers into spec/support/ and enables loading them from rails_helper.rb
 ```
 
 What it adds:
-- Factory Bot factories for every Spree model (`Spree::TestingSupport::Factories`)
-- The `'API v3 Store'` shared context used by API specs
+- Factory Bot factories for every Spree model (loaded via `require 'spree/testing_support/factories'`)
+- The `'API v3 Store'` shared context used by API specs (additionally requires `require 'spree/api/testing_support/v3/base'` in the spec file — the install generator does not wire it)
 - `stub_authorization!` for admin controller specs
 
 See the `spree-testing` skill for usage patterns.
@@ -133,7 +136,7 @@ For the full tutorial — decorators, controller extensions, model decorators, r
 
 ## Swapping a core service is NOT an extension
 
-A common confusion: "I want my own version of an existing Spree service — should I build an extension?" Almost always no. Spree exposes 64 swappable core services + 233 API injection points via `Spree.dependencies`. You subclass the default, register the override in `config/initializers/spree.rb`, and Spree calls your service everywhere. No gem packaging required.
+A common confusion: "I want my own version of an existing Spree service — should I build an extension?" Almost always no. Spree exposes 70 swappable core injection points via `Spree.dependencies` (or `Spree.<name> = ...` directly) plus 300+ API injection points (serializers, finders, per-endpoint services) via `Spree.api`. You subclass the default, register the override in `config/initializers/spree.rb`, and Spree calls your service everywhere. No gem packaging required.
 
 ```ruby
 # config/initializers/spree.rb
@@ -155,11 +158,11 @@ For one app: put the code directly in `app/` (subscribers, decorators, services,
 
 ## Common gotchas with extensions
 
-- **Migrations don't auto-apply.** Each install generator copies migrations into `backend/db/migrate/`; you must run `spree migrate` after. The `spree upgrade` command handles this for Spree itself but not for extensions — each extension's upgrade is manual.
+- **Migrations don't auto-apply.** Each install generator copies migrations into `backend/db/migrate/`; you must run `spree migrate` after. `spree upgrade` bundle-updates every spree-prefixed gem (extensions included), but its migration-install step (`spree:install:migrations`) only covers Spree core — and `spree migrate` has the same limitation. After an extension version bump, re-run the extension's install generator (or `spree rails railties:install:migrations`) to copy any new extension migrations, then `spree migrate` to apply them.
 - **Initializers can drift across upgrades.** When you bump an extension version, the initializer it generated may need new config keys. Check the extension's CHANGELOG before upgrading.
-- **Extensions ship migrations with a `.spree.rb` suffix** in the host app (e.g. `db/migrate/<ts>_create_spree_stripe_charges.spree.rb`). The `.spree` infix marks them as "copied from a gem" so they survive `db:schema:dump` correctly. Don't rename them.
+- **Extensions ship migrations with the engine name as a suffix** in the host app (e.g. `db/migrate/<ts>_setup_spree_stripe_models.spree_stripe.rb`; Spree core's own migrations use `.spree.rb`). The suffix records which engine a migration was copied from: the install tasks use it to skip already-copied migrations, and Spree's boot-time check uses it to warn when an engine's migrations are missing. Don't rename them.
 - **Decorators in extensions** can collide with decorators in your app. If two reopen `Spree::Order` and define a method with the same name, last-loaded wins (load order is alphabetical by gem name). Avoid decorating the same model in two places.
-- **Engine-level subscribers** registered in an `initializer 'spree.<name>.subscribers'` block are appended once at boot. Reloading the development server is required when you change subscriber code.
+- **Engine-level subscribers** registered in an `initializer 'spree.<name>.subscribers'` block are appended once at boot. Subscriber code hot-reloads — Spree resets and re-registers all subscribers on each code reload. Only changes to the registration itself (the engine initializer) need a server restart.
 
 ## Where to read further
 

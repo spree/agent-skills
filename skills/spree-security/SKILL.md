@@ -69,29 +69,22 @@ Spree::Product.where("price > #{user_value}")
 Ransack is safe by default — but only filters on **allowlisted** attributes. Declare per model:
 
 ```ruby
-def self.whitelisted_ransackable_attributes
-  %w[name slug created_at price]
-end
-
-def self.whitelisted_ransackable_associations
-  %w[variants categories]
-end
-
-def self.whitelisted_ransackable_scopes
-  %w[available in_stock]
-end
+self.whitelisted_ransackable_attributes = %w[name slug created_at price]
+self.whitelisted_ransackable_associations = %w[variants categories]
+self.whitelisted_ransackable_scopes = %w[available in_stock]
 ```
 
-Filtering on an un-allowlisted attribute returns 422 — the user can't exfiltrate `password_digest` via `q[password_digest_eq]=...`.
+Filtering on an un-allowlisted attribute is silently ignored — Ransack's default `ignore_unknown_conditions: true` drops the unknown condition (Spree's v3 controllers call `ransack`, not `ransack!`), so the user can't exfiltrate `password_digest` via `q[password_digest_eq]=...`. But there's no error signal either: the response is 200 and that filter simply doesn't apply, while any valid conditions in the same query still do.
 
 ### Mass assignment
 
-Same answer as Strong Parameters above. Plus:
+Same answer as Strong Parameters above — `params.permit` is the mass-assignment defense; nothing extra is needed on the model.
+
+Do **not** reach for `attr_readonly` here: it blocks *all* writes after creation, not just mass assignment. With Rails 7.1+ defaults, assigning a readonly attribute on a persisted record raises `ActiveRecord::ReadonlyAttributeError` (on older defaults the write is silently dropped). Putting it on `encrypted_password` breaks Devise password changes and password resets for every existing user. Reserve `attr_readonly` for genuinely immutable columns:
 
 ```ruby
-# Forbid setting protected attributes via mass assignment
-class Spree::User
-  attr_readonly :id, :encrypted_password
+class Spree::Order < Spree.base_class
+  attr_readonly :number  # generated once, never changes
 end
 ```
 
@@ -110,7 +103,7 @@ Rails.application.config.content_security_policy do |policy|
   policy.font_src    :self, :https, :data
   policy.img_src     :self, :https, :data
   policy.script_src  :self, 'https://js.stripe.com'
-  policy.style_src   :self, :unsafe_inline   # admin needs this for Bootstrap; relax over time
+  policy.style_src   :self, :unsafe_inline   # legacy admin's inline styles need this; relax over time
   policy.connect_src :self, 'https://api.stripe.com'
 end
 ```
@@ -128,6 +121,8 @@ ActionController::Base.helpers.sanitize(product.description, tags: %w[p br stron
 Sanitize before storing OR before rendering, but pick one and be consistent.
 
 ### CORS
+
+Spree also ships an admin-manageable CORS allowlist for the Admin API — per-store `Spree::AllowedOrigin` records (validated to be origin-only http(s) URLs), managed in the dashboard under Settings → Allowed origins or via the Admin API (`/api/v3/admin/allowed_origins`). The spree-starter app's `config/initializers/cors.rb` consults it dynamically (cached, exact-match in production) for `/api/v3/admin/*` with `credentials: true` — so admin/dashboard origins belong in that allowlist, not in hand-written `allow` blocks. For your storefront origin on `/api/v3/store/*`, add a static `allow` block as shown below.
 
 If your storefront is a separate origin (typical for Next.js):
 
@@ -171,24 +166,36 @@ If the integration is later compromised, the blast radius is limited to what its
 
 ### CanCanCan abilities (admin JWT auth)
 
-Admin users authenticate via JWT and authorize via `Spree::Ability`. Customize:
+Admin users authenticate via JWT and authorize via `Spree::Ability`, which builds permissions from Permission Sets assigned to the user's roles. Customize by defining a permission set and assigning it to a role:
 
 ```ruby
-# backend/app/models/spree/ability_decorator.rb
-module Spree::AbilityDecorator
-  def initialize(user)
-    super
-    # Wholesale managers can read+update orders but never destroy
-    if user.has_spree_role?('wholesale_manager')
-      cannot :destroy, Spree::Order
-      can [:read, :update], Spree::Order, channel: 'wholesale'
+# app/models/my_app/permission_sets/wholesale_orders.rb
+module MyApp
+  module PermissionSets
+    class WholesaleOrders < Spree::PermissionSets::Base
+      def activate!
+        # Wholesale managers can read+update wholesale orders but never destroy
+        can [:read, :update], Spree::Order, channel: { code: 'wholesale' }
+        cannot :destroy, Spree::Order
+      end
     end
   end
-  Spree::Ability.prepend self
 end
 ```
 
-Defaults are restrictive — start from "can :read, :all" only if you're sure. Better: build up explicit grants per role.
+```ruby
+# config/initializers/spree.rb
+Rails.application.config.after_initialize do
+  Spree.permissions.assign(:wholesale_manager, [
+    Spree::PermissionSets::DashboardDisplay,
+    MyApp::PermissionSets::WholesaleOrders
+  ])
+end
+```
+
+(The role itself must exist: `Spree::Role.find_or_create_by(name: 'wholesale_manager')`.)
+
+Defaults are restrictive — users with no roles get only `Spree::PermissionSets::DefaultCustomer`. Build up explicit grants per role by composing built-in sets (`OrderManagement`, `ProductDisplay`, `StockManagement`, …) with custom ones; don't hand every role `SuperUser`.
 
 ### Payment method preferences
 
@@ -196,7 +203,7 @@ Payment methods (Stripe, Adyen, PayPal, etc.) store their gateway credentials as
 
 Two precautions:
 
-- **Set `Rails.application.credentials.secret_key_base`** consistently across all environments. Without it, the preference serializer's encryption is weakened or unstable.
+- **Gateway preferences are stored UNENCRYPTED** as serialized YAML in `spree_payment_methods.preferences` — treat the database and its backups as containing live secrets. Two pieces of key material do matter elsewhere: keep `secret_key_base` stable, because secret API key authentication HMAC-SHA256s tokens with it (rotating it invalidates every `sk_` key; publishable `pk_` keys are unaffected), and configure `active_record_encryption` credentials consistently, because webhook endpoint secrets are encrypted with ActiveRecord::Encryption when those keys are present.
 - **Use the admin UI to enter live keys** (Settings → Payments → edit method), not seed scripts or direct DB writes. Treat preference rows as containing live secrets; back up encrypted.
 
 If a gateway secret leaks (committed to git, exposed in a log, copied to a chat), rotate at the provider first (Stripe dashboard, Adyen back office), then update the admin preference, then audit recent transactions.
@@ -230,41 +237,35 @@ Multi-store stores share a database. **Always scope queries through `current_sto
 
 ```ruby
 # ✅
-@orders = current_store.orders.where(user: current_customer)
+@orders = current_store.orders.where(user: current_user)
 
 # ❌ — leaks orders from other stores
-@orders = Spree::Order.where(user: current_customer)
+@orders = Spree::Order.where(user: current_user)
 ```
 
 The Store API does this automatically via the `Spree::Api::V3::Store::ResourceController` base class. Custom controllers must replicate the pattern.
 
 ### IDOR (Insecure Direct Object Reference)
 
-Customer A trying to load `/api/v3/store/orders/or_<customerB_order>`. The base `ResourceController#scope` already restricts to `current_user`'s orders, so the lookup returns 404 — but if you override `find_resource` or write a custom controller, you must replicate the scoping.
+Customer A trying to load `/api/v3/store/orders/or_<customerB_order>`. The Store API's `OrdersController#scope` restricts to the current user's orders (or the guest order token), so the lookup returns 404 — but if you override `scope`/`find_resource` or write a custom controller, you must replicate that scoping.
 
 Prefixed IDs don't help here — they're discoverable (sequential PKs under the hood). **Always authorize, never rely on ID opacity.**
 
 ### Rate limiting
 
-Spree itself doesn't ship application-level rate limiting — that's the deployer's responsibility. Layer it at two places:
+Spree's v3 API ships application-level rate limiting out of the box, built on Rails' `rate_limit` and backed by `Rails.cache`:
 
-- **Rack::Attack** in the Rails app (per-IP, per-API-key, sliding windows). Throttle login and checkout endpoints aggressively.
-- **CDN / load balancer** (Cloudflare, Fastly, AWS WAF) for the global ceiling.
+- **All v3 endpoints**: 300 requests / 60s, keyed by the `X-Spree-Api-Key` header (falling back to client IP when no key is sent).
+- **Auth endpoints** (per IP, to stop brute force): login 5/60s, registration 3/60s, token refresh and logout 10/60s, password reset 3/60s. Admin login/refresh and invitation acceptance get the same treatment.
 
-```ruby
-# config/initializers/rack_attack.rb
-class Rack::Attack
-  throttle('login attempts', limit: 5, period: 60) do |req|
-    req.ip if req.path == '/api/v3/store/auth/login' && req.post?
-  end
+Exceeding a limit returns `429` with error code `rate_limit_exceeded` and `Retry-After` / `X-RateLimit-*` headers. All limits are tunable via `Spree::Api::Config` preferences: `rate_limit_per_key`, `rate_limit_window`, `rate_limit_login`, `rate_limit_register`, `rate_limit_refresh`, `rate_limit_password_reset`. One operational caveat: counters live in `Rails.cache`, so multi-process deployments need a shared cache store (Redis/Memcached) — with an in-process store each worker counts independently.
 
-  throttle('api by key', limit: 600, period: 60) do |req|
-    req.env['HTTP_X_SPREE_API_KEY']
-  end
-end
-```
+Still layer defense in depth on top:
 
-Tune the numbers to your traffic shape. Without rate limiting, a leaked publishable key can be used to scrape your full catalog at carrier speed.
+- **Rack::Attack** for endpoints the built-in limits don't cover (legacy admin, storefront) and any custom throttling rules — don't duplicate the v3 auth throttles, they're already enforced.
+- **CDN / load balancer** (Cloudflare, Fastly, AWS WAF) for the global ceiling and volumetric attacks.
+
+Tune the numbers to your traffic shape — the defaults cap a leaked publishable key at 300 req/min, but a scraper rotating IPs without a key still warrants the CDN layer.
 
 ### Dependency hygiene
 
@@ -278,10 +279,9 @@ Run these in CI. The `spree/agent-skills` plugin doesn't ship a CI workflow — 
 
 ### Admin upload safety
 
-Admins can upload images, CSVs (imports), and theme assets. Risks:
+Admins can upload images and CSVs (imports). Risks:
 - **Polyglot files** (image+JS) — sanitize uploads, set `Content-Type` strictly, serve from a different origin than the app domain (S3 + CloudFront, not `app.example.com/uploads/…`).
 - **CSV formula injection** — sanitize fields starting with `=`, `+`, `-`, `@` before writing back to user-downloaded CSV exports.
-- **ZIP slip in theme uploads** — Spree extracts theme ZIPs; old versions had path traversal bugs (`../../../../config/credentials.yml.enc`). Stay current; the extraction code is hardened in 5.5+.
 
 ### Sensitive logs
 
@@ -303,7 +303,7 @@ Without this, a `POST /admin/payments` with form data will write the secret_key 
 ## A short checklist for a new Spree deployment
 
 - [ ] Production credentials in encrypted credentials or environment, **not** in repo.
-- [ ] `secret_key_base` set via `Rails.application.credentials` so payment method preferences serialize consistently.
+- [ ] `secret_key_base` stable and managed via credentials — secret API keys are HMAC-digested with it (rotating it invalidates every `sk_` key) and it is the fallback JWT signing secret. Webhook endpoint secrets use ActiveRecord::Encryption, whose keys (`active_record_encryption.*`) must also live in credentials.
 - [ ] CORS allowlist matches your storefront origin(s) only.
 - [ ] CSP defined and not `default_src 'unsafe-inline'` everywhere.
 - [ ] Brakeman + bundle audit + pnpm audit in CI.
@@ -320,7 +320,7 @@ Without this, a `POST /admin/payments` with form data will write the secret_key 
 
 - **Rails Security Guide:** https://guides.rubyonrails.org/security.html — read it cover to cover at least once.
 - **OWASP Top 10:** https://owasp.org/www-project-top-ten/ — annual update; the categories don't change much but the examples do.
-- **Spree credentials docs:** Spree developer docs → "Authentication", "Authorization".
+- **Spree credentials docs:** Spree developer docs → "Authentication", "Permissions".
 - **Webhook HMAC:** `spree-events-webhooks` skill.
 - **API scopes:** `spree-api-v3` skill.
 - **Payment data flow:** `spree-payments` skill.

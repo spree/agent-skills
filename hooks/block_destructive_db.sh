@@ -3,7 +3,7 @@
 # that have a real chance of wiping production data if mistargeted.
 #
 # Reads the tool invocation JSON from stdin, returns:
-#   exit 0   — allow (with optional stderr message Claude treats as advisory)
+#   exit 0   — allow (stderr is not shown to Claude on success)
 #   exit 2   — block (Claude shows the stderr message and refuses)
 #
 # We're deliberately strict on commands that match well-known destructive
@@ -20,7 +20,8 @@ fi
 
 # Read the tool input. Format: { "tool_name": "Bash", "tool_input": { "command": "..." } }
 input="$(cat)"
-command="$(echo "$input" | sed -n 's/.*"command":[[:space:]]*"\([^"]*\)".*/\1/p')"
+command="$(echo "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+[[ -z "$command" ]] && command="$(echo "$input" | sed -n 's/.*"command":[[:space:]]*"\([^"]*\)".*/\1/p')"
 
 # No command extracted? Don't block; fall through.
 [[ -z "$command" ]] && exit 0
@@ -29,10 +30,11 @@ command="$(echo "$input" | sed -n 's/.*"command":[[:space:]]*"\([^"]*\)".*/\1/p'
 # Each entry is a regex (extended). Order doesn't matter; first match blocks.
 patterns=(
   # Database-level drops and resets
-  'rake[[:space:]]+db:drop'
-  'rails[[:space:]]+db:drop'
-  'rake[[:space:]]+db:reset'
-  'rails[[:space:]]+db:reset'
+  # Anchored to a command position (line start, separator, subshell open, or
+  # JSON-escaped newline) so quoted mentions — rg 'rake db:reset',
+  # git commit -m '... rails db:drop' — don't trip the hook.
+  '(^|[;&|`][[:space:]]*|\\n[[:space:]]*|\$\([[:space:]]*)([[:alnum:]_/.=-]+[[:space:]]+)*(bin/)?(rake|rails)[[:space:]]+db:(drop|reset)'
+  'spree[[:space:]]+db:reset[[:space:]]+.*--yes'
 
   # Raw SQL drops against Spree tables
   'DROP[[:space:]]+TABLE.*spree_'
@@ -40,7 +42,6 @@ patterns=(
   'TRUNCATE.*spree_orders'
   'TRUNCATE.*spree_payments'
   'TRUNCATE.*spree_users'
-  'TRUNCATE.*spree_customers'
 
   # Mass deletes against critical Spree tables (raw SQL through CLI). No
   # trailing-semicolon anchor — `DELETE FROM spree_orders` is destructive
@@ -48,13 +49,11 @@ patterns=(
   # SQL through.
   'DELETE[[:space:]]+FROM[[:space:]]+spree_orders([[:space:]]|$)'
   'DELETE[[:space:]]+FROM[[:space:]]+spree_users([[:space:]]|$)'
-  'DELETE[[:space:]]+FROM[[:space:]]+spree_customers([[:space:]]|$)'
 
   # ActiveRecord mass deletes via runner / console
   'Spree::Order\.delete_all'
   'Spree::Order\.destroy_all'
   'Spree::User\.delete_all'
-  'Spree::Customer\.delete_all'
   'Spree::Payment\.delete_all'
 
   # Force-pushes to main/master. Match both flag orderings (`--force …

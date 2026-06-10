@@ -22,7 +22,7 @@ Variants relate to stock via `StockItem` (one per Variant per StockLocation) and
 
 ### Master vs default variant
 
-A Product has both a `master` variant (legacy concept, `is_master: true`) and a `default_variant` (newer column on Product pointing at the chosen variant). Both APIs work in 5.5; new code should reach for `product.default_variant` and the `default_variant_id` column. Use `product.variants` for the non-master sellable variants and `product.variants_including_master` only when you genuinely need the master row included.
+A Product has a `master` variant (legacy concept, `is_master: true`) and a computed `default_variant` method: when `Spree::Config[:track_inventory_levels]` is on, the first purchasable variant; otherwise the first non-master variant by `position`; master is only the fallback when the product has no other variants. `product.default_variant_id` just returns that computed variant's id. Neither is a database column in 5.5 — don't query or migrate against `default_variant_id` (a `default_variant_id` FK on `spree_products` is planned for 6.0, implementation not started; see `docs/plans/6.0-remove-master-variant.md`). Use `product.variants` for the non-master sellable variants and `product.variants_including_master` only when you genuinely need the master row included.
 
 ## The multi-channel / multi-store axis
 
@@ -43,13 +43,13 @@ The Store API resolves a channel per request from the `X-Spree-Channel` header (
 
 ```
 Market has_many :countries
-Market has_one  :currency, default_locale
+Market  columns:  currency (string), default_locale (string)
 Order belongs_to :market
 ```
 
-A Market is a regional configuration: its set of countries, currency, and default locale. Each Store has at least one Market. Orders are placed in a Market — that's what controls the currency the customer sees and what tax rules apply.
+A Market is a regional configuration: its set of countries, currency, and default locale. Stores typically get a default Market created automatically (when a default country is known at creation), but markets are optional — check `store.has_markets?`; currency and locale fall back to store-level defaults when no market exists. Orders are placed in a Market — that's what controls the currency the customer sees and what tax rules apply.
 
-For full Market documentation see `docs/developer/core-concepts/markets.mdx`.
+For full Market documentation see `node_modules/@spree/docs/dist/developer/core-concepts/markets.md`.
 
 ## Cart vs Order
 
@@ -58,7 +58,7 @@ In Spree, `Spree::Order` is both the in-progress cart and the completed transact
 ```ruby
 Spree::Order.where(state: 'cart')      # in-progress carts
 Spree::Order.where(state: 'complete')  # finalized orders
-Spree::Order.complete                  # equivalent named scope
+Spree::Order.complete                  # named scope — NOT equivalent: defined as where.not(completed_at: nil), so it matches any order that ever completed checkout, including ones later canceled or returned
 ```
 
 `Order#token` (`has_secure_token :token, length: 35`) identifies an anonymous cart across requests. Logged-in carts are owned via the `user_id` FK.
@@ -71,7 +71,7 @@ Order → Shipment → ShippingRate → ShippingMethod
 Order → Address (bill_address, ship_address)
 ```
 
-- **Payment** has its own state machine (`checkout → processing → completed / failed / void`). Column is `state`.
+- **Payment** has its own state machine (`checkout → processing → pending → completed`, plus `failed`, `void`, and `invalid`). Column is `state`.
 - **Shipment** has its own state machine (`pending → ready → shipped` with `canceled`). Column is `state`.
 - **ShippingRate** is a per-Shipment offer (e.g. UPS Ground $5.99, USPS Priority $8.99). The customer picks one.
 
@@ -117,8 +117,8 @@ IDs are computed from the integer PK via Sqids — no database column. The prefi
 
 Conventions for the prefix:
 
-- Long form for most resources: `prod`, `variant`, `category`, `customer`, `channel`
-- Short form for high-traffic / payment-adjacent resources: `or` (Order), `py` (Payment, Stripe parity), `adj` (Adjustment), `li` (LineItem)
+- Long form for some resources: `prod` (Product), `variant` (Variant)
+- Short codes for most others: `or` (Order), `py` (Payment, Stripe parity), `adj` (Adjustment), `li` (LineItem), `ctg` (Category/Taxon), `cus` (customer, Stripe parity), `ch` (Channel), `mkt` (Market)
 
 Never expose raw integer PKs in API responses.
 
@@ -140,13 +140,15 @@ Avoid passing store / currency / locale around as arguments. Use the ambient con
 Spree::Current.store      # The store handling this request
 Spree::Current.currency   # The currency to display prices in
 Spree::Current.locale     # The locale for translations
+Spree::Current.channel    # The resolved sales channel (falls back to the store's default channel)
+Spree::Current.market     # The resolved market (falls back to the store's default market)
 ```
 
-Available in models, controllers, jobs, and services. Set automatically by request middleware on the API; you set it manually in jobs and rake tasks that need to address a specific store.
+Available in models, controllers, jobs, and services. Set automatically by controller before_actions on the API (with built-in fallbacks to store defaults inside `Spree::Current`); you set it manually in jobs and rake tasks that need to address a specific store.
 
 ## When to read further
 
-- **Field-level docs:** `node_modules/@spree/docs/dist/developer/core-concepts/<topic>.mdx` for each model.
+- **Field-level docs:** `node_modules/@spree/docs/dist/developer/core-concepts/<topic>.md` for each model.
 - **OpenAPI spec:** `node_modules/@spree/docs/dist/api-reference/store.yaml` lists every API field and its type — better than guessing from the model source.
 - **Adding new models / API resources:** use the `spree-resource` skill.
 - **Extending existing Spree models** (add an association, validation, scope, method via decorator): use the `spree-decorators` skill.

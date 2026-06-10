@@ -5,6 +5,8 @@ description: Use when the user is working with Spree's payment system — paymen
 
 # Spree Payments
 
+> Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
+
 Payments in Spree are layered:
 
 ```
@@ -12,19 +14,19 @@ PaymentMethod   — the configured way to pay (Stripe, Adyen, PayPal, store cred
   ↓
 Payment         — the actual charge against an Order via a PaymentMethod
   ↓
-PaymentSource   — the customer's instrument (CreditCard, PaymentSession, etc.)
+PaymentSource   — the customer's instrument (CreditCard, StoreCredit, Spree::PaymentSource for wallets/accounts)
 ```
 
-A single Order can have multiple Payments (split payments, multiple cards), each with its own state.
+(A PaymentSession is not a payment source — it links to the Payment via the gateway transaction id, `response_code`/`external_id`.)
+
+A single Order can have multiple Payments (e.g. store credit or a gift card combined with a card payment), each with its own state. Creating a new non-store-credit payment auto-invalidates any other payment still in the `checkout` state (store credit payments are spared), so splitting an order across multiple cards at checkout isn't supported.
 
 ## Payment state machine
 
 ```
 checkout  →  processing  →  pending  →  completed
-                       ↘            ↘
-                        failed       void
-                       ↘
-                        invalid
+        ↘              ↘            ↘
+         invalid        failed       void
 ```
 
 | State | What it means |
@@ -34,8 +36,8 @@ checkout  →  processing  →  pending  →  completed
 | `pending` | Authorized but not captured (auth/capture flow, e.g. credit card pre-auth) |
 | `completed` | Captured — money has actually moved |
 | `failed` | Gateway returned an error during processing |
-| `void` | Cancelled before capture |
-| `invalid` | Card brand or instrument unsupported |
+| `void` | Cancelled — usually before capture, but completed payments can also be voided (gateway permitting) |
+| `invalid` | Superseded — a newer payment was added to the order (old `checkout` payments are auto-invalidated), or the source is unsupported by the gateway |
 
 Transitions are events: `started_processing`, `pend`, `complete`, `failure`, `void`, `invalidate`. After-callbacks fire `payment.completed` / `payment.voided` events. See the `spree-events-webhooks` skill.
 
@@ -43,17 +45,17 @@ Transitions are events: `started_processing`, `pend`, `complete`, `failure`, `vo
 
 A PaymentMethod is configured in the admin (Settings → Payments). The model carries:
 
-- `type` — the Ruby class implementing it (`Spree::PaymentMethod::Stripe`, `Spree::PaymentMethod::StoreCredit`, etc.)
+- `type` — the Ruby class implementing it (`SpreeStripe::Gateway`, `Spree::PaymentMethod::StoreCredit`, etc.)
 - `name` — what the customer sees ("Credit Card", "PayPal", etc.)
 - `display_on` — where it's shown (`back_end`, `front_end`, `both`)
 - `active` — whether it's currently accepting payments
 - `auto_capture` — whether to capture immediately or hold as `pending`
-- `preferences` — gateway credentials (encrypted preference store; never plain text on disk)
+- `preferences` — gateway credentials, stored as a YAML-serialized hash in a plain `text` column (NOT encrypted at rest — even values assigned from ENV are persisted in plain text, so treat database dumps and backups as containing live gateway secrets)
 
 ```ruby
 stripe = Spree::PaymentMethod.create!(
   name: 'Credit Card',
-  type: 'Spree::PaymentMethod::Stripe',
+  type: 'SpreeStripe::Gateway',
   display_on: 'front_end',
   active: true,
   preferences: { publishable_key: ENV['STRIPE_PUBLISHABLE_KEY'], secret_key: ENV['STRIPE_SECRET_KEY'] }
@@ -68,11 +70,11 @@ Most production stores don't create PaymentMethods in code — they're created v
 |---|---|
 | `Spree::PaymentMethod::StoreCredit` | spree_core — pays from `Spree::StoreCredit` balance |
 | `Spree::PaymentMethod::Check` | spree_core — back-office "manual" payment |
-| `Spree::PaymentMethod::Stripe` | spree_stripe gem |
-| `Spree::PaymentMethod::Adyen` | spree_adyen gem |
-| `Spree::PaymentMethod::PaypalCheckout` | spree_paypal_checkout gem |
+| `SpreeStripe::Gateway` | spree_stripe gem |
+| `SpreeAdyen::Gateway` | spree_adyen gem |
+| `SpreePaypalCheckout::Gateway` | spree_paypal_checkout gem |
 
-Custom payment methods subclass `Spree::PaymentMethod` and implement the gateway interface (`purchase`, `authorize`, `capture`, `void`, `credit`). Most stores use an existing extension instead of writing custom.
+Custom payment methods subclass `Spree::PaymentMethod`, register via `Spree.payment_methods << MyGateway`, and implement the Payment Session interface (`payment_session_class`, `create_payment_session`, `update_payment_session`, `complete_payment_session`, `parse_webhook_event`) — see docs/developer/how-to/custom-payment-method. Legacy card gateways subclass `Spree::Gateway`, which delegates `authorize`/`purchase`/`capture`/`void`/`credit` to an ActiveMerchant-style provider. Most stores use an existing extension instead of writing custom.
 
 ## Payment sessions (5.4+) — the modern flow
 
@@ -89,23 +91,23 @@ Customer interacts with provider UI
   ↓
 Provider redirects back to storefront OR fires a webhook to backend
   ↓
-PaymentSession.complete! → Payment created → Order transitions to confirm/complete
+PaymentSession.complete! → Payment created → storefront (or webhook handler) calls cart completion to finish the order
 ```
 
-The session has events: `payment_session.completed`, `payment_session.failed`, `payment_session.canceled`, `payment_session.expired`. Sessions expire after a configurable TTL (default 15 minutes) — abandoned sessions don't leave dangling payments.
+The session has events: `payment_session.processing`, `payment_session.completed`, `payment_session.failed`, `payment_session.canceled`, `payment_session.expired`. Sessions carry an optional `expires_at` set by the gateway extension from the provider's own session expiry; expired sessions drop out of the `active`/`not_expired` scopes (and can be transitioned via the `expire` event, firing `payment_session.expired`), so abandoned sessions don't leave dangling payments.
 
 For most stores, you don't interact with PaymentSession directly — the gateway extension (spree_stripe, spree_adyen) handles creation and completion. You just subscribe to the events if you need to react.
 
 ## Adding a payment gateway
 
-For Stripe, Adyen, PayPal: install the official extension. See the `spree-extensions` skill.
+Stripe, Adyen and PayPal ship preinstalled in spree-starter projects (the backend `create-spree-app` scaffolds) — nothing to install; enable and configure them in the admin under Settings → Payment methods. For any other gateway gem:
 
 ```bash
-echo "gem 'spree_stripe'" >> backend/Gemfile
-spree bundle install
-spree rails g spree_stripe:install
+spree eject                           # switch to the dev compose: bind-mounts backend/ so Gemfile changes take effect
+spree bundle add spree_other_gateway  # installs into the bundle_cache volume — no image rebuild needed
+spree rails g spree_other_gateway:install
 spree migrate
-spree restart
+spree dev                             # restart so the new gem loads (Ctrl+C the running one first)
 ```
 
 Then configure credentials via the admin Payment Methods UI (or via ENV-fed initializer for repeatability).
@@ -127,9 +129,9 @@ refund = payment.refunds.create!(
   reason: Spree::RefundReason.find_by(name: 'Goodwill'),
   refunder: current_user
 )
-# Then process via the gateway (calls the gateway and writes transaction_id):
-refund.perform!
 ```
+
+`create!` performs the gateway refund automatically (after_create callback) and writes `transaction_id`; it raises if the gateway call fails.
 
 For partial refunds with return authorizations, the chain is:
 ```
@@ -152,7 +154,7 @@ user.store_credits.create!(
 )
 ```
 
-Categories are admin-managed (Settings → Store Credit Categories).
+Categories are admin-managed via the CRUD pages at `/admin/store_credit_categories` (no admin navigation link — reachable by direct URL only).
 
 ## Gift cards
 
@@ -192,7 +194,7 @@ The webhook arrived before the storefront's redirect-back, OR the PaymentSession
 ## Where to read further
 
 - **Payment source:** `bundle show spree_core`/app/models/spree/payment.rb — the state machine and processing methods.
-- **Payment processing:** `Spree::Payment::Processing` concern — `purchase`, `authorize`, `capture`, `void`, `credit` methods.
+- **Payment processing:** `Spree::Payment::Processing` concern — `process!`, `authorize!`, `purchase!`, `confirm!`, `capture!`, `void_transaction!`, `cancel!` methods.
 - **PaymentSession:** `Spree::PaymentSession` — the 5.4+ redirect-flow wrapper.
-- **Docs:** `node_modules/@spree/docs/dist/developer/core-concepts/payments.mdx`.
+- **Docs:** `node_modules/@spree/docs/dist/developer/core-concepts/payments.md` (the how-to companion is `dist/developer/how-to/custom-payment-method.md`).
 - **Stripe gem:** `github.com/spree/spree_stripe` — best reference for a real-world payment integration.

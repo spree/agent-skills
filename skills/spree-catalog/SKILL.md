@@ -5,18 +5,20 @@ description: Use when the user is working with Spree's product catalog — Produ
 
 # Spree Catalog
 
+> Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
+
 The catalog is everything that's for sale: Products, the Variants underneath them, the Options that distinguish those Variants, the Categories that group them, and the search index that makes them findable.
 
 ## The catalog graph
 
 ```
 Product
-  ├── Variant (one master + zero or more "real" variants; `default_variant_id` FK on Product)
+  ├── Variant (one master + zero or more "real" variants; master flagged via `is_master`)
   │     ├── Price (per currency)
   │     ├── StockItem (per stock location)
   │     ├── VariantMedia (images, videos, focal point — 5.5)
-  │     └── OptionValue × ProductOptionType
-  ├── Category × CategoryProduct (the join)
+  │     └── OptionValue × OptionValueVariant
+  ├── Category × Classification (the join)
   ├── ProductPublication × Channel (5.5 — which channels surface this product)
   ├── ProductPromotionRule (which promos this product qualifies for)
   └── Metafield (custom fields — 5.4+)
@@ -41,13 +43,13 @@ product.variants_including_master   # => everything
 
 If a Product has variants (color × size), the master is mostly a placeholder; default pricing/SKU still lives there as a fallback.
 
-A newer column, `Product.default_variant_id`, can also point at a chosen variant directly:
+`Product#default_variant` is a computed helper, not a stored column. With `Spree::Config[:track_inventory_levels]` enabled it returns the first purchasable (in-stock or backorderable) variant; if none qualifies — or inventory tracking is off — it returns the first variant by position. A product with no real variants falls back to the master:
 
 ```ruby
-product.default_variant   # => the variant chosen as "default" (uses default_variant_id when set)
+product.default_variant   # => first purchasable (or first-by-position) variant; master if the product has no variants
 ```
 
-New code can reach for `default_variant`; the master accessor remains for backwards compatibility.
+A real `default_variant_id` FK on Product is planned for 6.0 (`6.0-remove-master-variant.md`, implementation not started). Today `Product#default_variant_id` is just a memoized method returning `default_variant.id`, and `master` is still the live mechanism — not a backwards-compatibility accessor.
 
 ## Options + OptionTypes + OptionValues
 
@@ -115,7 +117,7 @@ product.product_publications                                           # Product
 product.product_publications.where(channel: store.default_channel)     # publication for the default channel
 ```
 
-A ProductPublication has `published_at` and `unpublished_at` windows. The `Product.for_store(store)` scope returns products visible on a store; `Product.active(currency)` filters to products that are live with prices in the requested currency.
+A ProductPublication has `published_at` and `unpublished_at` windows. The `Product.for_store(store)` scope returns products owned by a store (`store_id`); per-channel visibility is checked via `Product.for_channel(channel)` / ProductPublications; `Product.active(currency)` filters to products that are live with prices in the requested currency.
 
 **Pre-5.5 (4.x, early 5.x):** Products were on Stores directly via `spree_products_stores`. The 5.4→5.5 upgrade migrates this. See the `spree-upgrade` skill.
 
@@ -125,7 +127,7 @@ Spree ships a pluggable search provider system in 5.4+:
 
 | Provider | Class | Use when |
 |---|---|---|
-| Database (default) | `Spree::SearchProvider::Database` | Small catalogs (<10K products), PG with `pg_trgm` extension for fuzzy match |
+| Database (default) | `Spree::SearchProvider::Database` | Small catalogs (<10K products); case-insensitive substring (LIKE) matching — no typo tolerance |
 | Meilisearch | `Spree::SearchProvider::Meilisearch` | Real-time facets, typo tolerance, large catalogs |
 
 Configured via `Spree.search_provider = 'Spree::SearchProvider::Meilisearch'` in `backend/config/initializers/spree.rb`.
@@ -144,11 +146,11 @@ The task is a no-op on the Database provider (no index to maintain) and a full c
 
 ### Custom searchable attributes
 
-Spree's search-indexed fields come from `Spree::Product#search_presentation`, which returns the hash that's pushed to the index. Override via a decorator or — preferred — swap the presenter via `Spree::Dependencies.search_product_presenter_class`. After changes, reindex.
+Spree's search-indexed fields come from `Spree::Product#search_presentation`, which returns the array of document hashes (one per market × locale combination) that gets pushed to the index. Override via a decorator or — preferred — swap the presenter via `Spree::Dependencies.search_product_presenter_class`. After changes, reindex.
 
 ## Images + Media
 
-5.5 added product-level media. Media records (`Spree::Asset` subclasses) have a `media_type` from `Spree::Asset::MEDIA_TYPES = %w[image video external_video]`. External videos store their URL in `external_video_url`; uploaded videos and images use ActiveStorage attachments. `focal_point` enables crop-aware thumbnails on images.
+5.5 added product-level media. Media records (`Spree::Asset` subclasses) have a `media_type` from `Spree::Asset::MEDIA_TYPES = %w[image video external_video]`. Images use ActiveStorage attachments; both video media types (`video`, `external_video`) require a URL in `external_video_url` — hosted video-file uploads are not supported. `focal_point` enables crop-aware thumbnails on images.
 
 ```ruby
 product.media                                       # all media for the product
@@ -157,7 +159,7 @@ product.media.where(media_type: 'image').first      # first image
 
 The legacy variant-level `Spree::Image` (via `Spree::Asset`) still exists for variants. Variants also expose `variant_media`, `associated_media`, and `gallery_media` for finer-grained queries.
 
-Images use ActiveStorage. Resized derivatives (thumb/small/large) are generated lazily on first request via the `image_processing` gem. Pre-generating is possible via a background job — see the `spree-performance` skill.
+Images use ActiveStorage. Resized derivatives (mini/small/medium/large/xlarge/og_image — see `Spree::Config.product_image_variant_sizes`) are declared with `preprocessed: true`, so ActiveStorage generates WebP variants in background jobs right after upload.
 
 ## Brand (custom — your Product's brand)
 
@@ -182,16 +184,16 @@ end
 
 Walk this list:
 
-1. **Is it on the store?** `Spree::Product.for_store(store).where(id: id).exists?` — if false, the Product has no `store_id` or no ProductPublication on any of the store's channels.
-2. **Is it published on the current channel?** `product.product_publications.where(channel: Spree::Current.channel).any?` — if false, no ProductPublication for the channel in scope.
-3. **Is the publication window active?** `published_at < Time.current` AND (`unpublished_at` is nil OR `unpublished_at > Time.current`).
+1. **Is it on the store?** `Spree::Product.for_store(store).where(id: id).exists?` — if false, the Product's `store_id` doesn't point at this store. (Publication checks come next.)
+2. **Is it published on the current channel?** `product.product_publications.where(channel: Spree::Current.channel).any?` — if false, no ProductPublication for the channel in scope. (equivalently: `Spree::Product.for_channel(Spree::Current.channel).exists?(id: product.id)`)
+3. **Is the publication window active?** (`published_at` is nil OR `published_at <= Time.current`) AND (`unpublished_at` is nil OR `unpublished_at > Time.current`).
 4. **Does it have a price in the current currency?** `product.master.prices.where(currency: Spree::Current.currency).any?`
 5. **Is it in stock?** `product.in_stock?` — false if no `track_inventory` variant has positive stock.
 6. **Is the search index stale?** If using Meilisearch, run `spree rake spree:search:reindex`.
 
 ### "Bulk-update prices"
 
-For currency-wide price changes, batch via `Spree::Price.where(currency: 'USD').update_all('amount = amount * 1.1')`. After: the product is fine, but if you have PriceHistory enabled (EU Omnibus), generate history entries with `spree rake spree:price_history:seed`. See the `spree-pricing` skill.
+For currency-wide price changes, batch via `Spree::Price.where(currency: 'USD').update_all('amount = amount * 1.1')`. After: the product is fine, but if you have PriceHistory enabled (EU Omnibus), note that `update_all` bypasses the `after_save` callback that records history — iterate and save instead (`Spree::Price.where(currency: 'USD').where.not(amount: nil).find_each { |p| p.update!(amount: p.amount * 1.1) }`) or create `Spree::PriceHistory` rows explicitly. (`spree rake spree:price_history:seed` is only a one-time post-migration backfill that skips any price that already has history rows.) See the `spree-pricing` skill.
 
 ### "Add a custom field to Products"
 
@@ -199,14 +201,14 @@ Use Metafields (5.4) — no decorator, no schema change. First create a `Metafie
 
 ```ruby
 product.set_metafield('catalog.season', 'fall-2026')
-product.get_metafield('catalog.season')   # => "fall-2026"
+product.get_metafield('catalog.season')&.value   # => "fall-2026" (get_metafield returns the Spree::Metafield record, or nil)
 ```
 
 `display_on: front_end` (or `both`) surfaces the metafield on the Store API; `back_end` is admin-only. See `Spree::Metafields` concern and the `spree-resource` skill (`--metafields` flag) for built-in support.
 
 ## Where to read further
 
-- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/products.mdx`
-- **Media:** `node_modules/@spree/docs/dist/developer/core-concepts/media.mdx`
-- **Search + filtering:** `node_modules/@spree/docs/dist/developer/core-concepts/search-filtering.mdx`
-- **Custom search provider:** `node_modules/@spree/docs/dist/developer/how-to/custom-search-provider.mdx`
+- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/products.md`
+- **Media:** `node_modules/@spree/docs/dist/developer/core-concepts/media.md`
+- **Search + filtering:** `node_modules/@spree/docs/dist/developer/core-concepts/search-filtering.md`
+- **Custom search provider:** `node_modules/@spree/docs/dist/developer/how-to/custom-search-provider.md`

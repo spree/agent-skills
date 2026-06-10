@@ -15,7 +15,7 @@ Order
         ├── StockLocation        — where it ships from
         ├── ShippingRate × n     — offered rates from configured methods
         │    └── ShippingMethod  — UPS Ground, USPS Priority, etc.
-        └── InventoryUnit × n    — one per LineItem unit in the shipment
+        └── InventoryUnit × n    — per LineItem, each carrying a quantity (may split, e.g. partial backorder)
 
 ShippingMethod
   ├── ShippingCategory × n       — which categories of items this method handles
@@ -31,10 +31,15 @@ Each line item's variant has a ShippingCategory. A ShippingMethod's eligibility 
 ## Shipment state machine
 
 ```
-pending → ready → shipped
-   ↓                ↑
-canceled ←──────────┘ (via :resume)
+pending ──ready──→ ready ──ship──→ shipped
+   │    ←─pend──     │                ↑
+   │                 │                │
+   └────cancel───→ canceled ──ship────┘
+                      │
+                      └──resume──→ ready (or pending if not yet ready)
 ```
+
+(`cancel` is allowed from both `pending` and `ready`; `resume` returns a canceled shipment to `ready` — or `pending` when the order isn't ready — and a canceled shipment can be shipped directly via `ship`.)
 
 | State | What it means |
 |---|---|
@@ -69,14 +74,14 @@ The cheapest rate per Shipment is `selected: true` by default. The customer can 
 
 | Calculator | Computes |
 |---|---|
-| `Spree::Calculator::Shipping::FlatRate` | Same rate regardless of weight/items |
+| `Spree::Calculator::Shipping::FlatRate` | Same flat rate; optional min/max weight and item-total bounds (returns nil → method unavailable outside them) |
 | `Spree::Calculator::Shipping::FlatPercentItemTotal` | % of order item total |
 | `Spree::Calculator::Shipping::PerItem` | Rate × number of items |
 | `Spree::Calculator::Shipping::FlexiRate` | Tiered by item count |
 | `Spree::Calculator::Shipping::PriceSack` | Tiered by order total (e.g. under $50 = $10, over $50 = free) |
-| `Spree::Calculator::Shipping::DigitalDelivery` | Zero — for digital products |
+| `Spree::Calculator::Shipping::DigitalDelivery` | Configurable amount (default 0); only available when every item in the package is digital |
 
-Custom calculators subclass `Spree::Calculator` and implement `compute(package)`. The package is a `Spree::Stock::Package` with line items, total weight, total cost.
+Custom shipping calculators subclass `Spree::ShippingCalculator` and implement `compute_package(package)` (optionally `available?(package)`). The package is a `Spree::Stock::Package` with contents, total weight, and item total.
 
 ## StockLocation
 
@@ -104,11 +109,14 @@ variant.total_on_hand   # summed across all locations
 Stock changes are recorded as `Spree::StockMovement` entries — an audit log:
 
 ```ruby
-warehouse.stock_movements.create!(
-  stock_item: stock_item,
+stock_item = warehouse.stock_item_or_create(variant)
+stock_item.stock_movements.create!(
   quantity: 10,                  # positive = received, negative = sold/lost
   originator: purchase_order     # polymorphic — what caused the movement
 )
+# or the higher-level helpers (these wrap the same StockMovement creation):
+warehouse.restock(variant, 10, purchase_order)
+warehouse.unstock(variant, 2, shipment)
 ```
 
 Don't update `count_on_hand` directly; create a StockMovement and let the model recompute the count.
@@ -120,16 +128,18 @@ When an order is split into shipments, Spree groups InventoryUnits by where they
 ```
 Order has 3 items: [A from East, B from East, C from West]
   ↓
-Spree::Stock::Splitter inspects available stock per item per location
+Order Routing (`order.order_routing_strategy.for_allocation`, default `Spree::OrderRouting::Strategy::Rules`) ranks eligible StockLocations via the channel's routing rules, packs each location (`Spree::Stock::Packer` + the `Spree.stock_splitters` chain), and `Spree::Stock::Prioritizer` assigns each inventory unit to the first ranked package with on-hand stock
   ↓
 Creates 2 Shipments:
   - Shipment 1: items A + B from East Warehouse
   - Shipment 2: item C from West Warehouse
 ```
 
+Since Spree 5.5, *which* stock locations fulfill an order is decided by **Order Routing**, not the splitters. Each Channel has an ordered list of `Spree::OrderRoutingRule` rows (STI subclasses: `Spree::OrderRouting::Rules::PreferredLocation`, `MinimizeSplits`, `DefaultLocation` — seeded in that priority order) that rank the candidate stock locations. The routing strategy is configurable via `store.preferred_order_routing_strategy` (default `Spree::OrderRouting::Strategy::Rules`), overridable per channel; `Spree::OrderRouting::Strategy::Legacy` restores the pre-5.5 `Spree::Stock::Coordinator` behavior and is dropped in 6.0. Splitters then break each chosen location's allocation into packages *within* that location.
+
 Each Shipment gets its own ShippingRate calculation (different origin = different rates). The customer pays each shipment's selected rate.
 
-For custom splitter logic — distance-based, prefer-closest-warehouse, prefer-faster-method, etc. — see `docs/developer/how-to/custom-stock-splitter.mdx`.
+For location-preference logic — distance-based, prefer-closest-warehouse, minimize splits — write a custom order routing rule or strategy, see `node_modules/@spree/docs/dist/developer/how-to/custom-order-routing.mdx`. For breaking one location's allocation into more packages (refrigerated, hazmat, gift wrap), write a custom splitter — see `node_modules/@spree/docs/dist/developer/how-to/custom-stock-splitter.mdx`.
 
 ## Returns + Reverse Logistics
 
@@ -142,32 +152,33 @@ Customer ships item back
   ↓
 CustomerReturn (admin-received, links InventoryUnits to receipt)
   ↓
-Reimbursement (calculates refund amount minus restocking fees)
+Reimbursement (calculates the refund amount from the return items' amounts — admins can adjust per-item amounts before reimbursing)
   ↓
 Refund (to original payment) OR StoreCredit
 ```
 
-Admin creates a `ReturnAuthorization` listing the InventoryUnits the customer is returning. When the items come back, an admin records a `CustomerReturn` to mark the units received. The `Reimbursement` calculates the refund amount, accounting for any restocking fees or item-level adjustments, and produces either a `Refund` (back to the original payment method) or a `StoreCredit`.
+Admin creates a `ReturnAuthorization` listing the InventoryUnits the customer is returning. When the items come back, an admin records a `CustomerReturn` to mark the units received. The `Reimbursement` calculates the refund amount from the return items' amounts, and produces either a `Refund` (back to the original payment method) or a `StoreCredit`.
 
 ## Customizing shipping
 
 ### Custom calculator
 
 ```ruby
-# backend/app/models/spree/calculator/shipping/weight_based.rb
+# app/models/spree/calculator/shipping/weight_based.rb
 module Spree
-  class Calculator::Shipping::WeightBased < Spree::Calculator
+  class Calculator::Shipping::WeightBased < Spree::ShippingCalculator
     preference :rate_per_kg, :decimal, default: 5.00
 
-    def compute(package)
-      total_weight = package.contents.sum { |c| c.variant.weight * c.quantity }
-      total_weight * preferred_rate_per_kg
+    def compute_package(package)
+      package.weight * preferred_rate_per_kg
     end
   end
 end
 
-# Register so it shows in the admin shipping method UI
-Rails.application.config.spree.calculators.shipping_methods << Spree::Calculator::Shipping::WeightBased
+# Register so it shows in the admin shipping method UI (config/initializers/spree.rb)
+Rails.application.config.after_initialize do
+  Spree.calculators.shipping_methods << Spree::Calculator::Shipping::WeightBased
+end
 ```
 
 ### Hooking into shipment events
@@ -199,13 +210,22 @@ By default, the cheapest rate is selected. To prefer carrier reliability, decora
 
 ```ruby
 module Spree::Stock::EstimatorDecorator
+  # which rate is pre-selected
+  def choose_default_shipping_rate(rates)
+    preferred = rates.find { |r| r.shipping_method.name == 'UPS Ground' }
+    (preferred || rates.min_by(&:cost))&.selected = true
+  end
+
+  # display order
   def sort_shipping_rates(rates)
-    # Prefer specific carriers, then cheapest
     rates.sort_by { |r| [r.shipping_method.name == 'UPS Ground' ? 0 : 1, r.cost] }
   end
+
   Spree::Stock::Estimator.prepend self
 end
 ```
+
+Note: `sort_shipping_rates` only affects display order; `choose_default_shipping_rate` (which runs first, picking the cheapest by default) decides which rate gets `selected: true`.
 
 ## Common shipping problems
 
@@ -225,7 +245,7 @@ Walk this list:
 
 ### "Order ships from the wrong warehouse"
 
-`Spree::Stock::Splitter` picks based on first-available stock and favors the default StockLocation. For closest-warehouse-wins or other custom logic, implement a custom splitter — see `docs/developer/how-to/custom-stock-splitter.mdx`.
+Order Routing decides the location: the default `Spree::OrderRouting::Strategy::Rules` walks the channel's routing rules (preferred_location → minimize_splits → default_location baseline). Adjust the channel's `Spree::OrderRoutingRule` rows, or for closest-warehouse-wins write a custom routing rule (implementing `#rank(order, locations)`) or strategy — see `node_modules/@spree/docs/dist/developer/how-to/custom-order-routing.mdx`.
 
 ### "Shipping rate doesn't update when cart changes"
 
@@ -236,4 +256,4 @@ The rates are cached per Shipment after first calculation. When the cart changes
 - **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/shipments.mdx`, `inventory.mdx`
 - **Custom stock splitter:** `node_modules/@spree/docs/dist/developer/how-to/custom-stock-splitter.mdx`
 - **Custom order routing:** `node_modules/@spree/docs/dist/developer/how-to/custom-order-routing.mdx`
-- **Stock services:** `Spree::Stock::Estimator`, `Spree::Stock::Splitter`, `Spree::Stock::Coordinator`
+- **Stock services:** `Spree::Stock::Estimator`, `Spree::Stock::Packer`, `Spree::Stock::Prioritizer`, `Spree::Stock::Splitter::Base` (+ `ShippingCategory`/`Backordered`/`Digital`/`Weight` subclasses). Allocation goes through `Spree::OrderRouting::Strategy::Rules` by default; `Spree::Stock::Coordinator` is deprecated (slated for removal in 6.0) and survives only in the opt-in Legacy routing strategy, `Spree::Exchange`, and `Spree::Cart::EstimateShippingRates`.

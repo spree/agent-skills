@@ -82,17 +82,17 @@ This is the right path for **building an app or integration**. The app gets a mi
 curl -X POST https://my-spree.example.com/api/v3/admin/auth/login \
      -H "Content-Type: application/json" \
      -d '{"email":"admin@example.com","password":"…"}'
-# Returns: { access_token, refresh_token, token_type: "Bearer" }
+# Returns: { token, user } — the JWT is in `token`; the refresh token is set as an
+# httpOnly cookie (used by POST /api/v3/admin/auth/refresh), not returned in the body.
 
 # Then use the JWT
-curl -H "X-Spree-API-Key: pk_<publishable>" \
-     -H "Authorization: Bearer <jwt>" \
+curl -H "Authorization: Bearer <jwt>" \
      https://my-spree.example.com/api/v3/admin/orders
 ```
 
 JWT admin auth uses **`Spree::Ability` (CanCanCan)** to determine what the human user can do. Roles + permission sets configure who can manage what. This is what the admin SPA (`@spree/dashboard`) uses.
 
-(The publishable key is required alongside the JWT to identify the store the user is logged into.)
+(The store is resolved from the request host, not from an API key.)
 
 **What's exposed:** everything visible to the Store API plus timestamps (`created_at`, `updated_at`, `deleted_at` if paranoid), cost prices, private metadata, internal notes, audit fields (`approved_by_id`, `cancelled_by_id`), back-office relations.
 
@@ -106,7 +106,7 @@ JWT admin auth uses **`Spree::Ability` (CanCanCan)** to determine what the human
 | API key prefix | `pk_*` | `sk_*` (or use JWT instead) |
 | Timestamps in responses | No | Yes |
 | Cost prices exposed | No | Yes |
-| Channel scoping | Required | Optional |
+| Channel scoping | Optional header (default channel when omitted) | N/A (header ignored; filter via Ransack) |
 | Default for new endpoints | Read-only | Full CRUD |
 | Authorization | Per-endpoint defaults | Scopes (sk_*) OR CanCanCan abilities (JWT) |
 
@@ -117,8 +117,8 @@ Every list endpoint returns:
 ```json
 {
   "data": [
-    { "id": "prod_86Rf07xd4z", "type": "product", "name": "...", ... },
-    { "id": "prod_kvJ0pQrTb9", "type": "product", "name": "...", ... }
+    { "id": "prod_86Rf07xd4z", "name": "...", ... },
+    { "id": "prod_kvJ0pQrTb9", "name": "...", ... }
   ],
   "meta": {
     "page": 1,
@@ -137,11 +137,11 @@ Every list endpoint returns:
 Single-record endpoints return the record's attributes directly (no wrapping):
 
 ```json
-{ "id": "prod_86Rf07xd4z", "type": "product", "name": "...", ... }
+{ "id": "prod_86Rf07xd4z", "name": "...", ... }
 ```
 
 Conventions:
-- **`type`** is the resource type identifier (`"product"`, `"order"`, `"cart"`). Used by clients to dispatch.
+- **There is no `type` field.** The resource kind is implied by the prefixed-ID prefix (`prod_`, `or_`, `variant_`, …). A few resources do expose a `type` attribute (payment methods, promotion rules/actions, price rules), but it is an STI class discriminator specific to that resource, not an envelope convention.
 - **`meta` is on lists only.** Single-record responses don't have it.
 - **`next` / `previous`** are page numbers (or `null` at the ends). Pagination is offset-based via Pagy — pass `?page=N&limit=N` to navigate.
 
@@ -158,8 +158,7 @@ ful_…                 Shipment
 adj_…                 Adjustment
 li_…                  LineItem
 ch_…                  Channel
-pk_…                  ApiKey (publishable)
-sk_…                  ApiKey (secret)
+key_…                 ApiKey        (record ID; the credential token values are prefixed pk_/sk_ — those are secrets, not IDs)
 cf_…                  CustomField   (alias of Metafield)
 ```
 
@@ -172,10 +171,10 @@ Computation: `Sqids.encode([integer_pk])` with `min_length: 10`. Deterministic �
 Resources support an `expand` query param for sideloading related data:
 
 ```bash
-curl '/api/v3/store/products/cool-shirt?expand=images,default_variant,categories'
+curl '/api/v3/store/products/cool-shirt?expand=media,default_variant,categories'
 ```
 
-Returns the product with `images`, `default_variant`, and `categories` inlined as full objects. Without `expand`, related objects appear as ID references on the parent. Dot notation lets you expand nested associations:
+Returns the product with `media`, `default_variant`, and `categories` inlined as full objects. Without `expand`, related objects appear as ID references on the parent. Dot notation lets you expand nested associations:
 
 ```bash
 curl '/api/v3/store/products/cool-shirt?expand=variants.media'
@@ -211,7 +210,7 @@ GET /api/v3/admin/orders?q[s]=completed_at+desc
 
 Common predicates: `_eq`, `_not_eq`, `_in`, `_not_in`, `_cont` (LIKE %x%), `_start` (LIKE x%), `_gteq`, `_lteq`, `_gt`, `_lt`, `_present`, `_blank`.
 
-Only attributes in the model's `whitelisted_ransackable_attributes` and `whitelisted_ransackable_associations` are queryable. Trying to filter on an unallowed attribute returns 422.
+Only attributes in the model's `whitelisted_ransackable_attributes` and `whitelisted_ransackable_associations` are queryable. Predicates on attributes outside the whitelist are silently ignored — the request returns 200 with that condition dropped (any remaining whitelisted predicates still apply), not a 422.
 
 ## Error responses
 
@@ -222,16 +221,16 @@ All errors use a consistent envelope:
 { "error": { "code": "invalid_token", "message": "Valid API key required" } }
 
 // 403 Forbidden (scope missing)
-{ "error": { "code": "insufficient_scope", "message": "Required scope: write_orders" } }
+{ "error": { "code": "access_denied", "message": "API key lacks scope: write_orders", "details": { "required_scope": "write_orders" } } }
 
 // 404 Not Found
-{ "error": { "code": "not_found", "message": "Order not found" } }
+{ "error": { "code": "record_not_found", "message": "Product not found" } }
 
 // 422 Unprocessable Entity (validation)
 {
   "error": {
-    "code": "validation_failed",
-    "message": "Validation failed",
+    "code": "validation_error",
+    "message": "Email can't be blank and Customer is required for checkout",
     "details": {
       "email": ["can't be blank"],
       "base": ["Customer is required for checkout"]
@@ -243,6 +242,8 @@ All errors use a consistent envelope:
 { "error": { "code": "rate_limit_exceeded", "message": "..." } }
 ```
 
+Note: some resources return a specific code instead of `record_not_found`: `order_not_found` (orders), `cart_not_found` (carts — order lookups on /carts paths), `line_item_not_found`, `variant_not_found`. The message is always "<Model> not found".
+
 The `details` map on 422s uses **attribute names** as keys. Map field-level errors to inputs; `base` errors are non-field-specific (display as a form-level banner). The `@spree/sdk` includes a `SpreeError` class that parses these automatically.
 
 ## Rate limiting
@@ -253,9 +254,9 @@ The API has per-key and per-endpoint rate limits configured via `Spree::Api::Con
 |---|---|---|
 | `rate_limit_per_key` | 300 / 60s | General requests, per API key |
 | `rate_limit_window` | 60s | Window for the per-key counter |
-| `rate_limit_login` | 5 / 60s | `POST /api/v3/store/auth/login`, per IP |
+| `rate_limit_login` | 5 / 60s | `POST /api/v3/{store,admin}/auth/login` + admin invitation acceptance, per IP |
 | `rate_limit_register` | 3 / 60s | Register endpoint, per IP |
-| `rate_limit_refresh` | 10 / 60s | Token refresh, per IP |
+| `rate_limit_refresh` | 10 / 60s | Token refresh (store + admin) and store logout, per IP |
 | `rate_limit_password_reset` | 3 / 60s | Password reset, per IP |
 
 Hit limits → `429 Too Many Requests` with `Retry-After` header. The `@spree/sdk` retries with exponential backoff automatically.
@@ -273,7 +274,7 @@ When the underlying column has a legacy name, the model has an alias method (e.g
 ### "I'm getting 401 on every call"
 
 - Check `X-Spree-API-Key` header is set.
-- Verify the key is valid: `GET /api/v3/admin/auth/me` returns 200 if your JWT is valid; otherwise 401.
+- Verify the key is valid: `GET /api/v3/admin/me` returns 200 if your JWT is valid; otherwise 401.
 - Publishable key for Store API; secret OR JWT for Admin API. Mixing them = 401.
 
 ### "I'm getting 403 on Admin API"
@@ -281,9 +282,9 @@ When the underlying column has a legacy name, the model has an alias method (e.g
 - For secret keys: the key doesn't have the required scope. Check the key's scopes; either grant the scope or use a JWT admin user.
 - For JWT admins: the user doesn't have the required ability. Check `Spree::Ability` rules for the user's role.
 
-### "Filter returns 422 'attribute not allowed'"
+### "My q[...] filter is silently ignored"
 
-The attribute isn't in `whitelisted_ransackable_attributes`. Either add it (model decorator) or filter on a different attribute.
+The attribute isn't in the model's Ransack allowlist. The API uses lenient `.ransack`, so conditions on non-whitelisted attributes are silently dropped — the list comes back unfiltered (200, no error). Add the attribute via `Spree.ransack.add_attribute(Spree::Product, :attr)` in an initializer, or append it to `whitelisted_ransackable_attributes` in a model decorator.
 
 ### "Empty data array but I know records exist"
 
@@ -300,5 +301,5 @@ It doesn't — Webhooks 2.0 uses the same prefixed IDs as the API. If you're see
 - **OpenAPI spec:** `node_modules/@spree/docs/dist/api-reference/store.yaml` — every endpoint, parameter, response schema. Authoritative.
 - **Adding a new endpoint:** see the `spree-resource` skill — `spree:api_resource` generator produces v3-conformant controllers + serializers automatically.
 - **SDK:** `@spree/sdk` (Store) and `@spree/admin-sdk` (Admin) — typed clients. See the `spree-typescript-sdk` skill.
-- **Customization:** `node_modules/@spree/docs/dist/developer/customization/api.mdx` and `authentication.mdx`
+- **Customization:** `node_modules/@spree/docs/dist/developer/customization/api.md` and `authentication.md`
 - **Webhooks vs subscribers:** see the `spree-events-webhooks` skill.
