@@ -30,7 +30,7 @@ npx skills update
 
 ## What ships
 
-### 26 skills
+### 25 skills
 
 | Skill | When it activates |
 |---|---|
@@ -52,8 +52,7 @@ npx skills update
 | `spree-promotions` | Promotion rules, actions, calculators, coupon codes. |
 | `spree-pricing` | Variant prices, multi-currency, price lists, EU Omnibus / PriceHistory. |
 | `spree-shipping-fulfillment` | Shipments, methods, rates, stock locations, returns. |
-| `spree-admin` | Customizing the legacy Rails admin (`spree_admin` gem). |
-| `spree-dashboard` | Extending the React admin SPA (`@spree/dashboard`) via `defineDashboardPlugin`. |
+| `spree-admin` | Customizing the Spree admin (`spree_admin` gem). |
 | `spree-storefront` | The Next.js storefront and `@spree/sdk`. |
 | `spree-i18n` | UI translations (`Spree.t` + YAML) and data translations (Mobility). |
 | `spree-testing` | RSpec + Factory Bot + Capybara, `spree_dev_tools`, the `API v3 Store` shared context. |

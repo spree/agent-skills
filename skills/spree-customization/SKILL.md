@@ -20,9 +20,9 @@ This skill is a decision tree. It maps a customization need to the right specifi
 | React to something happening in Spree (order completed, product updated, customer registered, stock changed) | Events subscriber | **`spree-events-webhooks`** |
 | Notify an external service (ERP, CRM, fulfillment, analytics, Slack) when something happens | Events subscriber OR outbound webhook | **`spree-events-webhooks`** |
 | Replace how a core service computes (cart add, tax calculation, search, checkout flow, ability checks) | Dependency injection via `Spree.dependencies` | **`spree-dependencies`** |
-| Add a menu item / nav entry to the admin | `Spree.admin.navigation.sidebar.add` | **`spree-admin`** (Rails admin) or **`spree-dashboard`** (React) |
-| Add a section / form field to an existing admin page | `Spree.admin.partials.<page> << '...'` | **`spree-admin`** or **`spree-dashboard`** |
-| Customize an admin table (columns, sort) | `Spree.admin.tables.<key>.add ...` | **`spree-admin`** or **`spree-dashboard`** |
+| Add a menu item / nav entry to the admin | `Spree.admin.navigation.sidebar.add` | **`spree-admin`** |
+| Add a section / form field to an existing admin page | `Spree.admin.partials.<page> << '...'` | **`spree-admin`** |
+| Customize an admin table (columns, sort) | `Spree.admin.tables.<key>.add ...` | **`spree-admin`** |
 | Make a new attribute searchable / filterable in the API or admin | `Spree.ransack.add_attribute(Class, :attr)` | **`spree-api-v3`** |
 | Customize the checkout flow (skip a step, add a step, change validation) | `checkout_flow` block on a `Spree::Order` decorator | **`spree-checkout`** |
 | Add a brand-new model + API endpoint (Brand, Vendor, etc.) | `spree:api_resource` generator | **`spree-resource`** |
@@ -138,7 +138,7 @@ Rails.application.config.after_initialize do
 end
 ```
 
-→ See the **`spree-admin`** skill (legacy Rails admin) or **`spree-dashboard`** (React admin) for the full extension API.
+→ See the **`spree-admin`** skill for the full extension API.
 
 ### "I need to add a 'preferred carrier' column to the products admin form"
 

@@ -90,7 +90,7 @@ curl -H "Authorization: Bearer <jwt>" \
      https://my-spree.example.com/api/v3/admin/orders
 ```
 
-JWT admin auth uses **`Spree::Ability` (CanCanCan)** to determine what the human user can do. Roles + permission sets configure who can manage what. This is what the admin SPA (`@spree/dashboard`) uses.
+JWT admin auth uses **`Spree::Ability` (CanCanCan)** to determine what the human user can do. Roles + permission sets configure who can manage what.
 
 (The store is resolved from the request host, not from an API key.)
 

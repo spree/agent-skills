@@ -22,7 +22,7 @@ Default workflow:
 
 ## What you should know about Spree
 
-Read the `spree-project`, `spree-data-model`, `spree-api-v3`, `spree-events-webhooks`, `spree-resource`, `spree-extensions`, `spree-dashboard`, `spree-storefront`, `spree-upgrade` skills — they're activated alongside you and cover the conventions, extension points, and common patterns. Don't repeat what's in those skills; reference them when relevant and add the specific investigation results.
+Read the `spree-project`, `spree-data-model`, `spree-api-v3`, `spree-events-webhooks`, `spree-resource`, `spree-extensions`, `spree-storefront`, `spree-upgrade` skills — they're activated alongside you and cover the conventions, extension points, and common patterns. Don't repeat what's in those skills; reference them when relevant and add the specific investigation results.
 
 ## When to refuse
 

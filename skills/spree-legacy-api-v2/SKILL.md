@@ -141,7 +141,7 @@ The migration is **per-endpoint**. You don't need to flip everything at once; v2
 
 For admin apps: generate a secret key via the admin UI (Settings → Developers → API Keys, key type 'Secret') with the required scopes. Drop OAuth2 entirely.
 
-For customer flows: replace the OAuth2 login call with JWT login. The new flow returns refresh tokens too — see the admin authentication docs for the cookie-based pattern the admin SPA uses.
+For customer flows: replace the OAuth2 login call with JWT login. The new flow returns refresh tokens too — see the admin authentication docs for the cookie-based refresh pattern.
 
 ### Step 2: ID migration
 

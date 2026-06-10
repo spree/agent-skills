@@ -233,7 +233,7 @@ Integration specs are slow and brittle to maintain. Don't try to cover every com
 
 ## Writing feature specs (Capybara)
 
-Feature specs use rack_test by default (no browser, no JavaScript); tag examples with `js: true` to drive a real headless Chrome browser through the legacy Rails admin (or storefront). Turbo-driven admin pages need `js: true` — without it, `wait_for_turbo` and any Turbo Stream/Frame behavior is a no-op.
+Feature specs use rack_test by default (no browser, no JavaScript); tag examples with `js: true` to drive a real headless Chrome browser through the Rails admin (or storefront). Turbo-driven admin pages need `js: true` — without it, `wait_for_turbo` and any Turbo Stream/Frame behavior is a no-op.
 
 ```ruby
 # spec/features/spree/admin/brands_spec.rb
@@ -260,7 +260,7 @@ end
 
 ### `wait_for_turbo`
 
-The legacy admin uses Turbo (Hotwire). After clicking a button that triggers a Turbo Stream / Frame update, the response is async — Capybara needs to wait for the DOM update. `wait_for_turbo` waits for Turbo's in-flight requests to settle.
+The Rails admin uses Turbo (Hotwire). After clicking a button that triggers a Turbo Stream / Frame update, the response is async — Capybara needs to wait for the DOM update. `wait_for_turbo` waits for Turbo's in-flight requests to settle.
 
 `wait_for_turbo` comes from `Spree::Admin::TestingSupport::CapybaraUtils` in the `spree_admin` gem — it is NOT wired up by `spree_dev_tools:install` (the generator skips the gem's `spree_admin.rb` support file). If you get `NoMethodError: undefined method 'wait_for_turbo'`, add a `spec/support/spree_admin.rb`:
 
@@ -281,10 +281,6 @@ expect(page).to have_content('Success!')
 Many Capybara matchers (`have_content`, `have_css`) auto-poll, so they often work without `wait_for_turbo`. Use it explicitly when:
 - You're asserting on something OUTSIDE the page DOM (record count in DB).
 - You're chaining a second action after the first (`click_on 'Edit'` immediately after the previous form submit).
-
-### Admin SPA E2E tests (different)
-
-The React admin (`@spree/dashboard`) uses **Playwright**, not Capybara. See the `spree-dashboard` skill. Different runner, different style — UI-only assertions, no `waitForResponse` on API calls.
 
 ## Running tests
 
@@ -399,6 +395,5 @@ DO test:
 - **Spree's own factories:** `bundle show spree_core`/lib/spree/testing_support/factories/ — read these to discover available traits.
 - **`spree_dev_tools` source:** look at `lib/spree_dev_tools/generators/install/` and `lib/spree_dev_tools/rspec/support/` to see exactly what it adds.
 - **Full tutorial:** `docs/developer/tutorial/testing.mdx` in the Spree docs — covers the Brand example end-to-end.
-- **Admin SPA E2E (different stack):** `spree-dashboard` skill.
 - **RSpec docs:** https://rspec.info/documentation/
 - **Factory Bot guide:** https://github.com/thoughtbot/factory_bot/blob/main/GETTING_STARTED.md

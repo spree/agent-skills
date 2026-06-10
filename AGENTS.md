@@ -14,7 +14,7 @@ Spree Commerce is an open-source, self-hosted commerce platform built on Ruby on
 
 1. **Backend (Ruby gems)** — `spree_core` (models, services, business logic), `spree_api` (Store + Admin REST APIs under `/api/v3/`), `spree_admin` (Rails admin UI), optional payment/integration gems (`spree_stripe`, `spree_adyen`, `spree_paypal_checkout`, `spree_i18n`).
 2. **Frontend SDKs (TypeScript)** — `@spree/sdk` (Store API client), `@spree/admin-sdk` (Admin API client).
-3. **Admin UIs** — `spree_admin` (the Rails/Turbo admin) **OR** `@spree/dashboard` (the React SPA). Both are fully supported; pick what fits the project.
+3. **Admin UI** — `spree_admin` (the Rails/Turbo admin).
 
 Users run Spree in their own infrastructure — there's no Spree cloud. Everything is opt-in customization.
 
@@ -97,23 +97,12 @@ bundle exec rake parallel_setup         # create per-worker test DBs
 bundle exec parallel_rspec spec         # parallel run
 ```
 
-### Admin dashboard (React SPA)
-
-These commands apply only in a spree/spree monorepo checkout — projects scaffolded with `create-spree-app` have no `packages/` directory. To consume or extend `@spree/dashboard` from your own project, see `skills/spree-dashboard/SKILL.md`.
-
-```bash
-cd packages/dashboard       # spree/spree monorepo checkout only
-pnpm dev                    # http://localhost:5173 (proxies /api/* to :3000)
-pnpm test:e2e               # Playwright
-```
-
 ## Testing conventions
 
 - RSpec + Factory Bot + Capybara — **not** Minitest, **not** fixtures.
 - Install `spree_dev_tools` for Spree-specific helpers (`stub_authorization!`, `'API v3 Store'` shared context, Spree factories).
 - Always use factories (`create(:order_with_line_items)`), never `Model.create` directly.
 - Prefer `build` over `create` when persistence isn't needed.
-- React dashboard uses Playwright (not Capybara) with UI-only assertions — see `skills/spree-testing/SKILL.md`.
 - Don't test Rails framework guarantees (strong params, presence validations). Test your custom logic.
 
 ## Security non-negotiables
@@ -151,7 +140,6 @@ When the task domain matches one of these, read the corresponding `skills/<name>
 | Variant prices, multi-currency, price lists, EU Omnibus | `spree-pricing` |
 | Shipments, shipping methods, rates, stock locations, returns | `spree-shipping-fulfillment` |
 | Legacy Rails/Turbo admin customization (`spree_admin` gem) | `spree-admin` |
-| React admin SPA extension via `defineDashboardPlugin` (`@spree/dashboard`) | `spree-dashboard` |
 | Next.js storefront + `@spree/sdk` integration | `spree-storefront` |
 | UI translations (`Spree.t`) + data translations (Mobility) | `spree-i18n` |
 | RSpec / Factory Bot / `spree_dev_tools` testing patterns | `spree-testing` |

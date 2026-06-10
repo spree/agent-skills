@@ -1,19 +1,17 @@
 ---
 name: spree-admin
-description: Use when the user is customizing the legacy Rails admin (the `spree_admin` gem) — adding a new resource page, registering a sidebar item, customizing a column in an admin table, overriding a view, scaffolding a new admin section. The legacy admin is the Rails/Turbo admin; the React `@spree/dashboard` is the alternative covered by the spree-dashboard skill. Common phrasings include "add admin page", "Rails admin", "spree_admin", "scaffold admin resource", "admin sidebar", "override admin view", "Hotwire admin", "Turbo admin". If the project uses the React dashboard, use the spree-dashboard skill instead.
+description: Use when the user is customizing the Spree admin (the `spree_admin` gem) — adding a new resource page, registering a sidebar item, customizing a column in an admin table, overriding a view, scaffolding a new admin section. Common phrasings include "add admin page", "Rails admin", "spree_admin", "scaffold admin resource", "admin sidebar", "override admin view", "Hotwire admin", "Turbo admin".
 ---
 
 # Spree Legacy Rails Admin (`spree_admin`)
 
 > Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
 
-The legacy admin is a Rails engine — server-rendered ERB views, Stimulus + Turbo for interactivity, Tailwind for styling. It's the long-standing admin and remains a fully-supported option alongside the React `@spree/dashboard`.
-
-If you're working on the React dashboard instead, see the **spree-dashboard** skill. This skill is specifically the `spree_admin` gem's Rails admin.
+The admin is a Rails engine — server-rendered ERB views, Stimulus + Turbo for interactivity, Tailwind for styling. (Spree 6.0 will introduce a new React-based admin; on Spree 5.x, `spree_admin` is the admin.)
 
 ## Project layout
 
-The legacy admin lives in the `spree_admin` gem, mounted at `/admin`. View it as a normal Rails app:
+The Rails admin lives in the `spree_admin` gem, mounted at `/admin`. View it as a normal Rails app:
 
 ```
 spree_admin gem
@@ -167,6 +165,54 @@ end
 
 List all injection points with `Spree.admin.partials.keys` in a console.
 
+## Building admin UI — the form builder, components, and helpers
+
+When you write admin views or partials (a scaffolded resource form, an injected `product_form` section, an overridden view), use the admin's own UI vocabulary instead of raw Rails helpers — you get consistent styling, labels, error display, and i18n for free.
+
+### Form builder (the important one)
+
+Every admin `form_with` automatically uses `Spree::Admin::FormBuilder` (`default_form_builder` in the admin's BaseController) — no setup needed:
+
+```erb
+<%= form_with model: [:admin, @brand] do |f| %>
+  <%= f.spree_text_field :name, required: true %>
+  <%= f.spree_text_field :code, help: "Leave blank to auto-generate" %>
+  <%= f.spree_money_field :price, currency: current_store.default_currency %>
+  <%= f.spree_collection_select :tax_category_id, Spree::TaxCategory.all, :id, :name,
+        { include_blank: true, autocomplete: true }, {} %>
+  <%= f.spree_check_box :active %>
+  <%= f.spree_file_field :logo, width: 240, height: 240 %>
+<% end %>
+```
+
+The full method set: `spree_text_field`, `spree_number_field`, `spree_money_field` (locale-aware separators, normalizes to decimal on submit, appends the currency symbol), `spree_email_field`, `spree_date_field`, `spree_datetime_field`, `spree_text_area` (auto-grows), `spree_rich_text_area` (Trix), `spree_select` / `spree_collection_select` (pass `autocomplete: true` for a searchable dropdown — use it on any select with 20+ options), `spree_check_box`, `spree_radio_button` (requires an explicit `:id`), `spree_file_field` (drag-and-drop, preview, `crop: true`, `allowed_file_types:`).
+
+Common options on every method: `label:` (string, or `false` to hide), `required:` (renders the asterisk), `help:` (text under the field), `help_bubble:` (tooltip icon next to the label), `class:`. Validation errors render under the field automatically; labels resolve via i18n (`spree.<attribute>` then `activerecord.attributes.spree/<model>.<attribute>`).
+
+### UI components
+
+Helper-rendered components matching the admin's design system — use these instead of hand-rolled markup:
+
+| Component | Helpers |
+|---|---|
+| Dropdown | `dropdown { dropdown_toggle + dropdown_menu }` |
+| Dialog (modal) / Drawer (side panel) | `dialog_header`, `dialog_close_button`, `dialog_discard_button`; `drawer_header`, `drawer_close_button` |
+| Icon | `icon('plus')` — Tabler icon names |
+| Image with fallback | `spree_image` |
+| Tooltips | `tooltip`, `help_bubble` |
+| Status badge | `active_badge(condition)` |
+| Avatar, clipboard-copy, progress bar | `avatar`, `clipboard_component` / `clipboard_button`, `progress_bar` |
+| Dates in store timezone | `spree_date`, `spree_time`, `spree_time_ago`, `local_time` |
+
+### View helpers worth knowing
+
+- **Navigation/links:** `link_to_with_icon`, `link_to_edit`, `link_to_delete` (Turbo confirm built in), `button`, `external_link_to`, `page_header_back_button`
+- **Turbo:** `turbo_save_button_tag` (submit with saving state), `turbo_render_alerts`, `turbo_close_dialog`
+- **Context:** `current_store`, `current_currency`, `try_spree_current_user`, `supported_currencies`
+- **Model preferences:** `preference_fields` / `preference_field_for` — render form inputs for a model's `preference :x` declarations automatically (this is how payment-method and store settings forms are built)
+
+Full references ship in the local docs: `node_modules/@spree/docs/dist/developer/admin/form-builder.md`, `components.md`, and `helper-methods.md`.
+
 ## Decorating admin controllers
 
 The Spree admin controllers are normal Rails controllers — you can decorate them like any other. Scaffold the file with `spree generate controller_decorator Spree::Admin::ProductsController` — it emits `backend/app/controllers/spree/admin/products_controller_decorator.rb` with the `prepended` hook and the `prepend` wiring:
@@ -192,7 +238,7 @@ This is more invasive than nav/table customization — only reach for it when th
 
 ## Stimulus controllers — admin interactivity
 
-The legacy admin uses Stimulus + Turbo for client-side interactivity. Existing controllers live at `spree_admin/app/javascript/spree/admin/controllers/`:
+The Rails admin uses Stimulus + Turbo for client-side interactivity. Existing controllers live at `spree_admin/app/javascript/spree/admin/controllers/`:
 
 | Controller | What it does |
 |---|---|
@@ -213,27 +259,14 @@ For Turbo Streams (server-pushed UI updates), the same patterns apply as any Rai
 | Add a sidebar item linking to your own page | `Spree.admin.navigation.sidebar.add` in an initializer |
 | Add a column to an admin table | `Spree.admin.tables.<name>.add` in an initializer |
 | Add a new resource CRUD section | `bin/rails g spree:admin:scaffold Spree::YourModel` |
+| Write or edit a form | `f.spree_*` form-builder methods — see "Building admin UI" above |
+| Add a modal / dropdown / badge / tooltip | The component helpers — see "Building admin UI" above |
 | Change how an existing page looks | Override the view in `backend/app/views/spree/admin/...` |
 | Add a new action to a controller | Decorator (last resort — see `spree-project` skill first) |
 | Make a form field interactive | Stimulus controller + `data-controller="..."` in the view |
 | Push real-time updates to the UI | Turbo Stream broadcasts from a subscriber or service |
 | Change admin styling globally | Edit `backend/app/assets/tailwind/spree_admin.css` (created by the installer) — it imports the gem's base styles from `app/assets/tailwind/spree/admin/index.css`; add `@theme` overrides and custom Tailwind there |
 
-## What the legacy admin doesn't ship that the React dashboard does
-
-If you're choosing between the legacy admin and the React dashboard, here's what each does well:
-
-| Feature | Legacy admin | React dashboard |
-|---|---|---|
-| Customization via plugins | Via Rails initializers (nav, tables) and view overrides | Via `defineDashboardPlugin` (slots, nav, tables, settings) |
-| Real-time UI updates | Turbo Streams (server pushes) | TanStack Query (client polls/refetches) |
-| Multi-store support | Yes | Yes (built-in, store switcher in nav) |
-| Mobile-friendly | Limited | Yes (responsive layout) |
-| Slot-based UI extensions | Yes (`Spree.admin.partials` injection points — register ERB partials into named slots) | Yes (named injection points, React components) |
-| Type safety on extensions | No | Yes (TypeScript + Zod schemas) |
-| Translation infrastructure | Rails i18n (server-side) | i18next (client-side, with same key conventions) |
-
-If you don't need slots / TypeScript types / mobile, the legacy admin is more than enough and easier to customize via Rails idioms. If you're building deeply custom workflows or shipping a SaaS where admin UX matters, the dashboard is worth the move.
 
 ## Where to read further
 
@@ -242,3 +275,4 @@ If you don't need slots / TypeScript types / mobile, the legacy admin is more th
 - **Navigation API:** `Spree::Admin::Navigation` source — the full method surface for nav customization.
 - **Table API:** `Spree::Admin::Table` (`app/models/spree/admin/table.rb`) and `Spree::Admin::Table::Column` (`app/models/spree/admin/table/column.rb`) inside the gem — column types, options, sorting/filtering details. The registry behind `Spree.admin.tables` is `Spree::Admin::Engine::TablesEnvironment` in `lib/spree/admin/engine.rb`.
 - **Scaffold generator:** `bundle show spree_admin`/lib/generators/spree/admin/scaffold/ has the template files you can copy for advanced customization.
+- **Form builder / components / helpers:** `node_modules/@spree/docs/dist/developer/admin/form-builder.md`, `components.md`, `helper-methods.md` — the full option tables for everything in "Building admin UI" above.

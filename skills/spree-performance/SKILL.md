@@ -164,9 +164,7 @@ The full queue list lives in `Spree.queues` in `spree_core/lib/spree/core.rb` of
 
 ## Admin product table N+1
 
-The legacy admin preloads associations in the controller, not the table registry. The base `Spree::Admin::ResourceController` chains `.includes(collection_includes)` onto the scope and applies `preload_associations_lazily` (the ar_lazy_preload gem) to the collection; `Spree::Admin::ProductsController#collection_includes` supplies the products-table preloads (media attachments, stock items, master/variant prices) that ar_lazy_preload can't pick up automatically. If a custom column triggers per-row queries, override `collection_includes` in a controller decorator to add the association. `Spree.admin.tables.products.add` only defines the column (label, type, sortable, filterable, etc.) — it accepts no `preload:` option, and passing one raises `ActiveModel::UnknownAttributeError`.
-
-For the React dashboard, columns are populated via the Admin API which uses Stripe-style expansion — `?expand=variants,categories,media` on the request, with dot notation for nesting (e.g. `variants.prices`, max 4 levels). The dashboard's resource hooks pass `expand` where needed; custom additions need to update the `expand` param.
+The Rails admin preloads associations in the controller, not the table registry. The base `Spree::Admin::ResourceController` chains `.includes(collection_includes)` onto the scope and applies `preload_associations_lazily` (the ar_lazy_preload gem) to the collection; `Spree::Admin::ProductsController#collection_includes` supplies the products-table preloads (media attachments, stock items, master/variant prices) that ar_lazy_preload can't pick up automatically. If a custom column triggers per-row queries, override `collection_includes` in a controller decorator to add the association. `Spree.admin.tables.products.add` only defines the column (label, type, sortable, filterable, etc.) — it accepts no `preload:` option, and passing one raises `ActiveModel::UnknownAttributeError`.
 
 ## Caching patterns
 

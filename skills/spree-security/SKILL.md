@@ -103,7 +103,7 @@ Rails.application.config.content_security_policy do |policy|
   policy.font_src    :self, :https, :data
   policy.img_src     :self, :https, :data
   policy.script_src  :self, 'https://js.stripe.com'
-  policy.style_src   :self, :unsafe_inline   # legacy admin's inline styles need this; relax over time
+  policy.style_src   :self, :unsafe_inline   # the Rails admin's inline styles need this; relax over time
   policy.connect_src :self, 'https://api.stripe.com'
 end
 ```
@@ -262,7 +262,7 @@ Exceeding a limit returns `429` with error code `rate_limit_exceeded` and `Retry
 
 Still layer defense in depth on top:
 
-- **Rack::Attack** for endpoints the built-in limits don't cover (legacy admin, storefront) and any custom throttling rules — don't duplicate the v3 auth throttles, they're already enforced.
+- **Rack::Attack** for endpoints the built-in limits don't cover (Rails admin, storefront) and any custom throttling rules — don't duplicate the v3 auth throttles, they're already enforced.
 - **CDN / load balancer** (Cloudflare, Fastly, AWS WAF) for the global ceiling and volumetric attacks.
 
 Tune the numbers to your traffic shape — the defaults cap a leaked publishable key at 300 req/min, but a scraper rotating IPs without a key still warrants the CDN layer.

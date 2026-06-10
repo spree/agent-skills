@@ -87,7 +87,7 @@ bundle exec i18n-tasks unused             # list unused keys
 bundle exec i18n-tasks health             # all of the above
 ```
 
-The Spree monorepo runs `normalize` on its YAML files; if you're modifying `spree/admin/config/locales/en.yml` (legacy admin), always normalize after.
+The Spree monorepo runs `normalize` on its YAML files; if you're modifying `spree/admin/config/locales/en.yml` (the Rails admin), always normalize after.
 
 ### Default + fallback
 
@@ -197,7 +197,7 @@ For RTL support:
    I18n.available_locales = %i[en ar he]
    ```
 2. **Storefront direction:** storefronts are external (Next.js) apps, so RTL direction is the storefront's responsibility — set `dir="rtl"` in its own layout based on the active locale. Spree core ships no `i18n.dir` locale key.
-3. **Admin UI direction:** neither admin currently implements RTL layout. The legacy Rails admin layouts set `<html lang="...">` but never `dir`, and don't ship a Bootstrap RTL build; the React dashboard has no direction switching either (`index.html` and the i18next setup never touch `document.documentElement.dir`). RTL *data* works fine — Arabic/Hebrew strings are stored and returned as-is — but flipping the admin UI to RTL (e.g. setting `dir="rtl"` on the document root per locale) is something you'd have to add yourself.
+3. **Admin UI direction:** the admin doesn't implement RTL layout — the layouts set `<html lang="...">` but never `dir`, and there's no RTL stylesheet build. RTL *data* works fine — Arabic/Hebrew strings are stored and returned as-is — but flipping the admin UI to RTL (e.g. setting `dir="rtl"` on the document root per locale) is something you'd have to add yourself.
 4. **Mobility data** works the same — you store Arabic strings in `spree_product_translations` with `locale: 'ar'`.
 
 ## Storefront integration
@@ -284,7 +284,7 @@ Switchers should read `store.supported_locales_list` (markets' locales + the sto
 
 ### "Translations admin is missing for new content"
 
-The legacy admin already ships a centralized Product Translations page: an overview grid with per-locale coverage stats at `/admin/product_translations`, plus bulk CSV export/import via `Spree::Exports::ProductTranslations` / `Spree::Imports::ProductTranslations`. Per-field editing for other translatable models (`Spree.translatable_resources`: OptionType, Product, Taxon, Taxonomy, Store, Policy) lives on each record's own translations page (`/admin/translations/:resource_type/:id/edit`). The plan in `docs/plans/5.4-centralized-translations-admin.md` is still marked Draft, but its core scope — the product overview grid + CSV bulk operations — has already landed; only extensions beyond products remain open.
+The Rails admin already ships a centralized Product Translations page: an overview grid with per-locale coverage stats at `/admin/product_translations`, plus bulk CSV export/import via `Spree::Exports::ProductTranslations` / `Spree::Imports::ProductTranslations`. Per-field editing for other translatable models (`Spree.translatable_resources`: OptionType, Product, Taxon, Taxonomy, Store, Policy) lives on each record's own translations page (`/admin/translations/:resource_type/:id/edit`). The plan in `docs/plans/5.4-centralized-translations-admin.md` is still marked Draft, but its core scope — the product overview grid + CSV bulk operations — has already landed; only extensions beyond products remain open.
 
 ## Where to read further
 
@@ -292,4 +292,3 @@ The legacy admin already ships a centralized Product Translations page: an overv
 - **Spree docs:** `node_modules/@spree/docs/dist/developer/core-concepts/translations.md` (resource + UI translations); `node_modules/@spree/docs/dist/developer/core-concepts/markets.md` for locale/currency configuration per market.
 - **`spree_i18n` gem:** https://github.com/spree-contrib/spree_i18n — community translations.
 - **Plan files (monorepo):** `docs/plans/5.4-centralized-translations-admin.md`, `docs/plans/5.4-metafield-translations.md`.
-- **Admin SPA i18n:** see `spree-dashboard` skill — `packages/dashboard/src/locales/` + i18next setup.

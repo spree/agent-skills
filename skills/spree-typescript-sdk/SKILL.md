@@ -122,7 +122,7 @@ try {
 }
 ```
 
-For 422 in form contexts, the admin SPA's `mapSpreeErrorsToForm(err, form.setError)` maps `details` directly onto React Hook Form's `setError`. That helper lives in `@spree/dashboard-core` (packages/dashboard-core/src/lib/form-errors.ts), not in the SDK itself — but the SDK provides `err.details` in the shape that mapper expects.
+For 422 in form contexts, `err.details` keys are attribute names, so they map directly onto form-library error setters (e.g. React Hook Form's `setError`); `base` errors are non-field-specific — render them as a form-level banner.
 
 ### Retry config
 
@@ -241,7 +241,7 @@ const { data: orders } = await admin.orders.list({ state_eq: 'complete' })
 
 The secret key carries scopes (`read_orders`, `write_products`, etc.) — see `spree-api-v3` for the scope list. Requests for endpoints outside the key's scopes get 403.
 
-**Mode 2: JWT (admin SPA, human users)**
+**Mode 2: JWT (human admin users)**
 
 ```ts
 const admin = createAdminClient({
@@ -278,7 +278,7 @@ admin.store.get()        // current store config
 
 ### Exports endpoint
 
-The admin SPA's CSV export feature uses this:
+For example, a CSV export flow:
 
 ```ts
 const exportRecord = await admin.exports.create({
@@ -580,32 +580,6 @@ function useCreateCart() {
 }
 ```
 
-### Admin SPA hook pattern (dashboard)
-
-In `@spree/dashboard`, never call `adminClient` directly from components — wrap in a hook under `src/hooks/`:
-
-```ts
-// src/hooks/use-products.ts
-import { adminClient, useResourceKey } from '@spree/dashboard-core'
-import { useQuery } from '@tanstack/react-query'
-
-interface UseProductsParams {
-  page?: number
-  limit?: number
-  sort?: string
-  search?: string
-}
-
-export function useProducts({ page = 1, limit = 25, sort = '-updated_at', search }: UseProductsParams = {}) {
-  return useQuery({
-    queryKey: useResourceKey('products', { page, limit, sort, search }),
-    queryFn: () =>
-      adminClient.products.list({ page, limit, sort, ...(search ? { name_cont: search } : {}) }),
-  })
-}
-```
-
-See the `spree-dashboard` skill for the full resource-hook pattern.
 
 ## Common pitfalls
 
@@ -631,4 +605,3 @@ See the `spree-dashboard` skill for the full resource-hook pattern.
 - **Admin SDK source:** `packages/admin-sdk/src/admin-client.ts`.
 - **API protocol details:** see the `spree-api-v3` skill — auth, prefixed IDs, pagination, envelope.
 - **Webhooks delivery side:** see the `spree-events-webhooks` skill — endpoint config, retry logic, payload shape.
-- **Dashboard usage:** see the `spree-dashboard` skill — how the React admin SPA wires the admin SDK through resource hooks.

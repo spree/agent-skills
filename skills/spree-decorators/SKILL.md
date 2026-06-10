@@ -278,7 +278,7 @@ Rails.application.config.after_initialize do
 end
 ```
 
-This makes the attribute writable in the legacy Rails admin, which builds its strong params from this list. It does not automatically reach every API v3 endpoint: the v3 base `ResourceController` defaults `permitted_params` to the matching `Spree::PermittedAttributes` list, but controllers that enumerate their own `params.permit(...)` — including `Spree::Api::V3::Admin::ProductsController` — ignore the global list. To accept the attribute on those endpoints, decorate the controller's `permitted_params` (or contribute the attribute upstream).
+This makes the attribute writable in the Rails admin, which builds its strong params from this list. It does not automatically reach every API v3 endpoint: the v3 base `ResourceController` defaults `permitted_params` to the matching `Spree::PermittedAttributes` list, but controllers that enumerate their own `params.permit(...)` — including `Spree::Api::V3::Admin::ProductsController` — ignore the global list. To accept the attribute on those endpoints, decorate the controller's `permitted_params` (or contribute the attribute upstream).
 
 ## Controller decorator patterns
 
@@ -508,7 +508,7 @@ Async by default. Testable in isolation. See the `spree-events-webhooks` skill f
 - **You want a whole new model + API endpoint** → use the `spree:api_resource` generator. See the `spree-resource` skill.
 - **You want to swap how a service computes** → use `Spree.dependencies`. See the `spree-dependencies` skill.
 - **You want to react to a Spree event** → write a subscriber. See the `spree-events-webhooks` skill.
-- **You want to customize the admin UI** → use the admin partial / slot system. See the `spree-admin` skill (legacy Rails admin) or `spree-dashboard` (React).
+- **You want to customize the admin UI** → use the admin partial / slot system. See the `spree-admin` skill.
 - **You want a custom payment gateway** → subclass `Spree::PaymentMethod` and register it with `Spree.payment_methods << MyGateway`. See the `spree-payments` skill.
 - **You want to override admin tables or navigation** → use the admin extension APIs (`Spree.admin.tables`, the navigation registry). See the `spree-admin` skill.
 
