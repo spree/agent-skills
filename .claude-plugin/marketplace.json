@@ -1,5 +1,6 @@
 {
   "name": "spree",
+  "description": "Official Spree Commerce plugin marketplace \u2014 skills, the spree-expert subagent, slash commands, and safety hooks for building on Spree.",
   "owner": {
     "name": "Vendo Connect Inc.",
     "url": "https://spreecommerce.org"
@@ -8,7 +9,7 @@
     {
       "name": "spree",
       "source": "./",
-      "description": "Claude Code support for Spree Commerce projects — 25 skills, the spree-expert subagent, two slash commands (/spree:doctor, /spree:audit-upgrade), and two safety hooks (block destructive db commands, warn on hardcoded secrets)."
+      "description": "Claude Code support for Spree Commerce projects \u2014 25 skills, the spree-expert subagent, two slash commands (/spree:doctor, /spree:audit-upgrade), and two safety hooks (block destructive db commands, warn on hardcoded secrets)."
     }
   ]
 }

@@ -218,5 +218,5 @@ The rule: **anything customer-visible is the storefront. Anything that touches d
 
 - **SDK docs:** `node_modules/@spree/docs/dist/developer/sdk/quickstart.mdx` (also at https://spreecommerce.org/docs/developer/sdk/quickstart)
 - **Storefront docs:** `node_modules/@spree/docs/dist/developer/storefront/nextjs/architecture.mdx`, `customization.mdx`, `deployment.mdx`
-- **Storefront tutorial:** `node_modules/@spree/docs/dist/developer/tutorial/store-api.mdx`, `sdk.mdx`
+- **Storefront tutorial:** `node_modules/@spree/docs/dist/developer/tutorial/api.md`, `sdk.md`
 - **Storefront source:** https://github.com/spree/storefront — reference implementations for product listing, cart, checkout, account pages
