@@ -78,7 +78,7 @@ Invoked by Claude (not the user) for multi-step Spree work that benefits from a 
 | `PreToolUse` on `Bash` | Blocks destructive database commands (`rake db:drop`, `Spree::Model.delete_all`, raw `DROP TABLE spree_*`, force-push to main/master). |
 | `PostToolUse` on `Edit`/`Write`/`MultiEdit` | Warns when an edit adds a hardcoded secret (Stripe live keys, AWS access keys, GitHub PATs, OpenAI/Anthropic keys). |
 
-Hooks honor `SPREE_HOOKS_DISABLE=1` as an escape hatch. Like the slash commands, they require the Claude Code plugin install path below — `npx skills add` installs skills + subagent, but not commands or hooks (the `${CLAUDE_PLUGIN_ROOT}` path resolution that hooks need only works under the plugin install).
+Hooks honor `SPREE_HOOKS_DISABLE=1` as an escape hatch. Like the slash commands, they require the Claude Code plugin install path below — `npx skills add` installs skills, but not subagent, commands or hooks (the `${CLAUDE_PLUGIN_ROOT}` path resolution that hooks need only works under the plugin install).
 
 ## Claude Code: also get the safety hooks
 
@@ -89,7 +89,7 @@ If you're on Claude Code and want the safety hooks too, install as a plugin **fr
 /plugin install spree@spree
 ```
 
-Plugin install gives you everything `npx skills add` does **plus** the two slash commands and the two safety hooks. Use one path or the other — don't double-install (skills will collide).
+Plugin install gives you everything `npx skills add` does **plus** subagent and the two slash commands and the two safety hooks. Use one path or the other — don't double-install (skills will collide).
 
 ## Cross-tool compatibility
 

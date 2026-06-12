@@ -1,6 +1,6 @@
 ---
 name: spree-project
-description: Use when the user is working on a Spree Commerce project — anything involving Spree models, controllers, customization patterns (decorators, subscribers, services), Spree conventions like prefixed IDs / Spree:: namespacing / Spree.user_class / Spree::Current, or asking how Spree works. Activates broadly for any task in a Spree backend.
+description: Use when the user is working on a Spree Commerce project — anything involving Spree models, controllers, customization patterns (decorators, subscribers, services), Spree conventions like prefixed IDs / Spree::Model namespacing / Spree.user_class / Spree::Current, or asking how Spree works. Activates broadly for any task in a Spree backend.
 ---
 
 # Spree Commerce Project
