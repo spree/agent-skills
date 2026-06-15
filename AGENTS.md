@@ -129,6 +129,7 @@ When the task domain matches one of these, read the corresponding `skills/<name>
 | REST API v3 protocol — auth, envelopes, prefixed IDs, scopes | `spree-api-v3` |
 | Maintaining or migrating legacy v2 (JSON:API) integrations | `spree-legacy-api-v2` |
 | `@spree/sdk` + `@spree/admin-sdk` usage, extension patterns | `spree-typescript-sdk` |
+| Calling/inspecting the Admin API from the terminal, debugging requests (`spree api`) | `spree-cli` |
 | Upgrading Spree across minor/major versions | `spree-upgrade` |
 | Domain model — Orders, LineItems, Variants, Stores, Channels, Markets | `spree-data-model` |
 | Events + subscribers (in-process) + outbound webhooks (HMAC, retry) | `spree-events-webhooks` |

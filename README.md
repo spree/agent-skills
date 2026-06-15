@@ -42,6 +42,7 @@ npx skills update
 | `spree-api-v3` | Spree REST API v3 conventions — Store vs Admin surfaces, auth (pk_/sk_/JWT), scopes, prefixed IDs, envelope, Ransack filters. |
 | `spree-legacy-api-v2` | Maintaining or migrating away from the legacy API v2 (JSON:API style). |
 | `spree-typescript-sdk` | `@spree/sdk` + `@spree/admin-sdk` — auth modes, types, Zod, webhooks, retry config, MSW, extension patterns. |
+| `spree-cli` | `spree api` — call/inspect the Admin API from the terminal (gh api-style verbs, offline endpoint/schema discovery, credential layers). Especially for debugging. |
 | `spree-upgrade` | Upgrading Spree to a new version. |
 | `spree-data-model` | Domain model questions — Orders, LineItems, Variants, Stores, Channels, Markets. |
 | `spree-events-webhooks` | Subscribers + outbound webhooks (HMAC, retry, auto-disable). |
