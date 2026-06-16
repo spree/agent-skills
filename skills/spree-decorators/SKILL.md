@@ -495,7 +495,7 @@ end
 Subscribers are **not** auto-discovered from `app/subscribers/` — only classes in the `Spree.subscribers` array get wired to the event registry (Spree's engines add their built-in subscribers there; your app must add its own). Register yours in an initializer:
 
 ```ruby
-# config/initializers/event_subscribers.rb
+# config/initializers/spree.rb
 Rails.application.config.after_initialize do
   Spree.subscribers << ProductSyncSubscriber
 end

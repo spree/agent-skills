@@ -30,10 +30,17 @@ Automatic lifecycle events (`*.created`, `*.updated`, `*.deleted`) fire after th
 
 ### Writing a subscriber
 
-Put the class anywhere autoloadable (e.g. `app/subscribers/`), then register it in an initializer:
+Use the generator (Spree 5.5+) — it creates the class, a spec stub, and handles registration:
+
+```bash
+spree generate subscriber OrderComplete order.completed   # native: bin/rails g spree:subscriber …
+# flags: --sync (async: false), --skip-spec
+```
+
+Or by hand: put the class anywhere autoloadable (e.g. `app/subscribers/`), then register it in an initializer — subscribers are NOT auto-discovered, and an unregistered subscriber is a silent no-op:
 
 ```ruby
-# config/initializers/event_subscribers.rb
+# config/initializers/spree.rb
 Rails.application.config.after_initialize do
   Spree.subscribers << OrderCompleteSubscriber
 end

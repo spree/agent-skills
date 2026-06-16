@@ -55,7 +55,7 @@ class ErpOrderSyncSubscriber < Spree::Subscriber
 end
 ```
 
-Then register it — subscribers are not auto-discovered:
+Then register it — subscribers are not auto-discovered (or skip both steps with `spree generate subscriber ErpOrderSync order.completed`, which creates the class and the registration in one go):
 
 ```ruby
 # config/initializers/spree.rb
