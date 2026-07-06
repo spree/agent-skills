@@ -32,6 +32,8 @@ Spree::Promotion.create!(
 ```
 
 - **Coupon codes vs automatic:** promotions have a `kind` enum — `coupon_code` (default) or `automatic`. Coupon-code promos require `code` (normalized to lowercase; matched case-insensitively). For promos that apply automatically when rules match, pass `kind: :automatic` — leaving `code` nil without it fails validation, since `kind` defaults to `coupon_code`.
+- **Bulk codes:** for many unique single-use codes (one per email blast, influencer, etc.), set `multi_codes: true` + `number_of_codes:` (optionally `code_prefix:`) — Spree generates `Spree::CouponCode` records (`promotion.coupon_codes`) instead of using the single `code` column, and `usage_limit` doesn't apply.
+- **Console caveat:** `store` is validated as present and auto-filled from `Spree::Current.store` — in a bare console/rake context set it explicitly (`store: Spree::Store.default`) or the `create!` above raises.
 - **Per-customer limits:** add a `Spree::Promotion::Rules::OneUsePerUser` rule. The customer must be logged in (anonymous orders can't enforce per-customer limits — no identity).
 
 ## Built-in PromotionRule subclasses
@@ -40,11 +42,13 @@ Each rule subclasses `Spree::PromotionRule` and implements `eligible?(promotable
 
 | Rule | Eligibility |
 |---|---|
+| `Channel` | The order's channel is in a configured set of channels |
 | `Country` | The order's shipping country is in the configured ISO code list (defaults to the store's default country) |
 | `Currency` | The cart's currency matches |
 | `CustomerGroup` | The customer is in a specific group |
 | `FirstOrder` | The customer hasn't completed an order before |
 | `ItemTotal` | Order subtotal meets a threshold (configurable operator) |
+| `Market` | The order's market matches |
 | `OneUsePerUser` | The customer hasn't used this promo before |
 | `OptionValue` | At least one variant in the cart has a matching option value |
 | `Product` | At least one matching product is in the cart |
@@ -239,7 +243,7 @@ To change this behavior (e.g. allow stacking on one adjustable), swap in a custo
 
 Walk this list:
 
-1. **Is the code right?** Coupon codes are matched case-insensitively but must otherwise match exactly.
+1. **Is the code right?** Coupon codes are matched case-insensitively but must otherwise match exactly. On `multi_codes` promos, check the `Spree::CouponCode` records (`promotion.coupon_codes`) — each is single-use (`state: 'used'` once redeemed).
 2. **Within the window?** `promotion.starts_at < Time.current && (promotion.expires_at.nil? || promotion.expires_at > Time.current)`.
 3. **Usage limit not exceeded?** `promotion.usage_limit_exceeded?(order)` should be false (nil limit = unlimited). To inspect manually, `promotion.credits_count` is the number of distinct orders that have used the promo — compare it against `promotion.usage_limit` when a limit is set.
 4. **Every rule eligible?** With `match_policy: 'all'`, every rule must return true. Walk `promotion.rules.map { |r| [r.class.name, r.eligible?(order)] }` to see which fails. Check `r.eligibility_errors.full_messages` for the reason.
@@ -251,7 +255,7 @@ Confirm registration ran: `Spree.promotions.rules.include?(Spree::Promotion::Rul
 
 ## Where to read further
 
-- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/promotions.mdx`
-- **Custom rules + actions tutorial:** `node_modules/@spree/docs/dist/developer/how-to/custom-promotion.mdx`
+- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/promotions.md`
+- **Custom rules + actions tutorial:** `node_modules/@spree/docs/dist/developer/how-to/custom-promotion.md`
 - **Source:** `Spree::Promotion`, `Spree::PromotionRule`, `Spree::PromotionAction`, `Spree::Calculator` in the installed `spree_core` gem
 - **Adjustments:** see the `spree-data-model` skill — promotions create Adjustments tied to Orders, LineItems, or Shipments

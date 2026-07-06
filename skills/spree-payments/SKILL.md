@@ -14,7 +14,7 @@ PaymentMethod   — the configured way to pay (Stripe, Adyen, PayPal, store cred
   ↓
 Payment         — the actual charge against an Order via a PaymentMethod
   ↓
-PaymentSource   — the customer's instrument (CreditCard, StoreCredit, Spree::PaymentSource for wallets/accounts)
+source          — the Payment's polymorphic source: a CreditCard, StoreCredit, or Spree::PaymentSource (wallets/accounts)
 ```
 
 (A PaymentSession is not a payment source — it links to the Payment via the gateway transaction id, `response_code`/`external_id`.)
@@ -45,7 +45,7 @@ Transitions are events: `started_processing`, `pend`, `complete`, `failure`, `vo
 
 A PaymentMethod is configured in the admin (Settings → Payments). The model carries:
 
-- `type` — the Ruby class implementing it (`SpreeStripe::Gateway`, `Spree::PaymentMethod::StoreCredit`, etc.)
+- `type` — the Ruby class implementing it (`SpreeStripe::Gateway`, `Spree::PaymentMethod::StoreCredit`, etc.). Note the STI *column* stores the class name, but as of 5.5 the API-serialized `type` (and the value `POST /api/v3/admin/payment_methods` expects) is a stable shorthand — `stripe`, `adyen`, `paypal_checkout`, `check`, `store_credit` — see the 5.4→5.5 upgrade guide.
 - `name` — what the customer sees ("Credit Card", "PayPal", etc.)
 - `display_on` — where it's shown (`back_end`, `front_end`, `both`)
 - `active` — whether it's currently accepting payments

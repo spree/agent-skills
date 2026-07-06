@@ -16,7 +16,7 @@ This skill is a decision tree. It maps a customization need to the right specifi
 | What you're trying to do | Reach for | Deep-dive skill |
 |---|---|---|
 | Change merchant-facing settings (currencies, languages, tax zones, shipping methods, payment methods) | Admin Settings UI | — |
-| Tweak Spree's runtime behavior globally | `Spree::Config[:key]` in `config/initializers/spree.rb` | (configuration is straightforward — see docs link below) |
+| Tweak Spree's runtime behavior globally | `Spree.config` block (`config.<setting> = …`) in `config/initializers/spree.rb`; read anywhere via `Spree::Config[:key]` | (configuration is straightforward — see docs link below) |
 | React to something happening in Spree (order completed, product updated, customer registered, stock changed) | Events subscriber | **`spree-events-webhooks`** |
 | Notify an external service (ERP, CRM, fulfillment, analytics, Slack) when something happens | Events subscriber OR outbound webhook | **`spree-events-webhooks`** |
 | Replace how a core service computes (cart add, tax calculation, search, checkout flow, ability checks) | Dependency injection via `Spree.dependencies` | **`spree-dependencies`** |
@@ -49,7 +49,7 @@ That's a side effect that fires when an order finishes. Don't decorate `Spree::O
 class ErpOrderSyncSubscriber < Spree::Subscriber
   subscribes_to 'order.completed'
 
-  def call(event)
+  def handle(event)
     ErpClient.sync_order(event.payload['id'])
   end
 end
@@ -84,7 +84,7 @@ spree migrate
 Then add the `belongs_to :brand` to `Spree::Product` via a decorator:
 
 ```bash
-spree generate spree:model_decorator Spree::Product
+spree generate model_decorator Spree::Product   # bare generator names auto-prefix to spree:
 ```
 
 ```ruby
@@ -121,7 +121,7 @@ That's a service swap. Subclass `Spree::Cart::Recalculate` and register your rep
 Spree.cart_recalculate_service = MyApp::Cart::Recalculate
 ```
 
-→ See the **`spree-dependencies`** skill for the full dependency injection pattern, the catalog of 70 core + 302 API injection points, and the `spree:dependencies:list / :overrides / :validate` rake tasks.
+→ See the **`spree-dependencies`** skill for the full dependency injection pattern, the catalog of 70+ core and 300+ API injection points, and the `spree:dependencies:list / :overrides / :validate` rake tasks.
 
 ### "I need to add a 'Loyalty Points' page to the admin sidebar"
 

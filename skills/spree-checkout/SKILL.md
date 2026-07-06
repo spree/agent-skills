@@ -132,7 +132,7 @@ Common gotchas:
 
 `Spree::Address` is used for both billing and shipping. Order has `bill_address_id` and `ship_address_id`. Both can point at the same address (one-form checkout); the validator allows nil for both during the `cart` state.
 
-Country/State are normalized to `Spree::Country` and `Spree::State` records (not free text). Form input from the storefront is validated against the country's `Spree::State` set. State validation is gated by `Spree::Config[:address_requires_state]` and the country's `states_required` flag — countries with `states_required: false` skip it entirely. A country with `states_required: true` but no seeded `Spree::State` records still requires a free-text `state_name`.
+Country/State are normalized to `Spree::Country` and `Spree::State` records (not free text). Form input from the storefront is validated against the country's `Spree::State` set. State validation is gated by `Spree::Config[:address_requires_state]` (marked deprecated in 5.5, but still honored) and the country's `states_required` flag — countries with `states_required: false` skip it entirely. A country with `states_required: true` but no seeded `Spree::State` records still requires a free-text `state_name`.
 
 ### Guest checkout vs logged-in
 
@@ -212,7 +212,7 @@ end
 
 ## Where to read further
 
-- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/orders.mdx`, `payments.mdx`
-- **Checkout customization:** `node_modules/@spree/docs/dist/developer/customization/checkout.mdx`
+- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/orders.md`, `payments.md`
+- **Checkout customization:** `node_modules/@spree/docs/dist/developer/customization/checkout.md`
 - **Order source:** `Spree::Order` and `Spree::Order::Checkout` in the installed `spree_core` gem — the state machine wiring.
 - **Cart services:** `Spree::Cart::AddItem`, `Spree::Cart::Recalculate`, etc. in `spree_core/app/services/spree/cart/`.

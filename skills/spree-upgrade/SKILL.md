@@ -91,7 +91,7 @@ spree upgrade --to 5.4
 ### Doesn't
 
 - **Schedule cron jobs.** Some Spree releases add jobs that need scheduling (e.g. 5.5's `Spree::StockReservations::ExpireJob`). The "Next steps" panel at the end of the upgrade reminds you; check the upgrade doc for your target version (`https://spreecommerce.org/docs/developer/upgrades/<X.Y>-to-<A.B>`).
-- **Audit your custom decorators.** When Spree renames an API surface (e.g. `Spree::StoreProduct` → `Spree::ProductPublication` in 5.5), the upgrade can't migrate decorators that referenced the old name. You need to read the breaking-changes section of the upgrade doc and update by hand.
+- **Audit your custom decorators.** When Spree moves an API surface (e.g. 5.5 moved the product↔store association off the `spree_products_stores` join table onto `Spree::Product#store_id` plus per-channel `Spree::ProductPublication` records), the upgrade can't migrate decorators that referenced the old surface. You need to read the breaking-changes section of the upgrade doc and update by hand.
 - **Run extension upgrade steps.** The bundle update bumps `spree_*` extension gems (`spree_stripe`, `spree_adyen`, etc.) along with core — but their migrations, install generators, and breaking changes are not handled. After running `spree upgrade`, check each extension's CHANGELOG and run its upgrade steps by hand.
 
 ## After the upgrade

@@ -5,7 +5,7 @@ description: Use when the user is working on the optional Next.js storefront (th
 
 # Spree Storefront (Next.js)
 
-The Spree Next.js storefront is a separate application that talks to the Spree backend over the v3 Store API. It's hosted at `github.com/spree/storefront` and cloned separately into your project tree.
+The Spree Next.js storefront is a separate application that talks to the Spree backend over the v3 Store API. It lives at `github.com/spree/storefront`; `create-spree-app` clones it into `apps/storefront/` for you, or fork it directly for deeper customization.
 
 The storefront is **optional**. Headless deployments may use a custom frontend — React Native, Astro, Remix, or hand-rolled. Spree's job is to expose a clean API; what consumes it is your choice. This skill assumes the official Next.js storefront, but the API contract is identical for any frontend.
 
@@ -208,7 +208,7 @@ The rule: **anything customer-visible is the storefront. Anything that touches d
 
 ## Common gotchas
 
-- **Don't ship secret keys to the browser.** Only publishable keys (`pk_…`) belong in `NEXT_PUBLIC_*` env vars. Secret API keys (`sk_…`) are server-side only.
+- **Don't ship secret keys to the browser.** Secret API keys (`sk_…`) never belong in `NEXT_PUBLIC_*` env vars. In the official storefront even the Spree publishable key stays server-side (`SPREE_PUBLISHABLE_KEY`, no `NEXT_PUBLIC_` prefix) since all API calls run in Server Actions — `NEXT_PUBLIC_*` is only for third-party client SDK keys (Stripe/PayPal publishable keys).
 - **Cart tokens are not credentials** — they identify a cart, not a user. But they grant cart access, so treat them like a session token: HTTPS only, set as an httpOnly cookie when possible.
 - **Cache aggressively but invalidate on cart/auth changes.** Product catalog can sit in CDN; cart calls must always hit fresh.
 - **Pricing displayed must match what the API will charge.** Don't compute totals client-side. Always pull the cart's `total` from the API after add/remove operations — the backend applies promotions, taxes, shipping rules.
@@ -216,7 +216,7 @@ The rule: **anything customer-visible is the storefront. Anything that touches d
 
 ## Where to read further
 
-- **SDK docs:** `node_modules/@spree/docs/dist/developer/sdk/quickstart.mdx` (also at https://spreecommerce.org/docs/developer/sdk/quickstart)
-- **Storefront docs:** `node_modules/@spree/docs/dist/developer/storefront/nextjs/architecture.mdx`, `customization.mdx`, `deployment.mdx`
+- **SDK docs:** `node_modules/@spree/docs/dist/developer/sdk/quickstart.md` (also at https://spreecommerce.org/docs/developer/sdk/quickstart)
+- **Storefront docs:** `node_modules/@spree/docs/dist/developer/storefront/nextjs/architecture.md`, `customization.md`, `deployment.md`
 - **Storefront tutorial:** `node_modules/@spree/docs/dist/developer/tutorial/api.md`, `sdk.md`
 - **Storefront source:** https://github.com/spree/storefront — reference implementations for product listing, cart, checkout, account pages

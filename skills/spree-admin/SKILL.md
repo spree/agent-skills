@@ -42,7 +42,7 @@ This emits:
 | File | Purpose |
 |---|---|
 | `backend/app/controllers/spree/admin/brands_controller.rb` | Controller inheriting `Spree::Admin::ResourceController` |
-| `backend/app/views/spree/admin/brands/index.html.erb` | Listing page (uses `Spree.admin.tables.brands` for columns) |
+| `backend/app/views/spree/admin/brands/index.html.erb` | Listing page (renders `render_table @collection, :brands`; columns come from the table registry) |
 | `backend/app/views/spree/admin/brands/new.html.erb` | Create form page |
 | `backend/app/views/spree/admin/brands/edit.html.erb` | Edit form page |
 | `backend/app/views/spree/admin/brands/_form.html.erb` | Shared form partial |
@@ -185,7 +185,7 @@ Every admin `form_with` automatically uses `Spree::Admin::FormBuilder` (`default
 <% end %>
 ```
 
-The full method set: `spree_text_field`, `spree_number_field`, `spree_money_field` (locale-aware separators, normalizes to decimal on submit, appends the currency symbol), `spree_email_field`, `spree_date_field`, `spree_datetime_field`, `spree_text_area` (auto-grows), `spree_rich_text_area` (Trix), `spree_select` / `spree_collection_select` (pass `autocomplete: true` for a searchable dropdown — use it on any select with 20+ options), `spree_check_box`, `spree_radio_button` (requires an explicit `:id`), `spree_file_field` (drag-and-drop, preview, `crop: true`, `allowed_file_types:`).
+The full method set: `spree_text_field`, `spree_number_field`, `spree_money_field` (locale-aware separators, normalizes to decimal on submit, appends the currency symbol), `spree_email_field`, `spree_date_field`, `spree_datetime_field`, `spree_text_area` (auto-grows), `spree_rich_text_area` (Trix), `spree_select` / `spree_collection_select` (pass `autocomplete: true` for a searchable dropdown — use it on any select with 20+ options), `spree_check_box`, `spree_radio_button` (pass an explicit `:id` to bind the label to a specific radio; otherwise the label is matched by value), `spree_file_field` (drag-and-drop, preview, `crop: true`, `allowed_file_types:`).
 
 Common options on every method: `label:` (string, or `false` to hide), `required:` (renders the asterisk), `help:` (text under the field), `help_bubble:` (tooltip icon next to the label), `class:`. Validation errors render under the field automatically; labels resolve via i18n (`spree.<attribute>` then `activerecord.attributes.spree/<model>.<attribute>`).
 
@@ -198,10 +198,10 @@ Helper-rendered components matching the admin's design system — use these inst
 | Dropdown | `dropdown { dropdown_toggle + dropdown_menu }` |
 | Dialog (modal) / Drawer (side panel) | `dialog_header`, `dialog_close_button`, `dialog_discard_button`; `drawer_header`, `drawer_close_button` |
 | Icon | `icon('plus')` — Tabler icon names |
-| Image with fallback | `spree_image` |
+| Image with fallback | `spree_image_tag` |
 | Tooltips | `tooltip`, `help_bubble` |
 | Status badge | `active_badge(condition)` |
-| Avatar, clipboard-copy, progress bar | `avatar`, `clipboard_component` / `clipboard_button`, `progress_bar` |
+| Avatar, clipboard-copy, progress bar | `render_avatar`, `clipboard_component` / `clipboard_button`, `progress_bar_component` |
 | Dates in store timezone | `spree_date`, `spree_time`, `spree_time_ago`, `local_time` |
 
 ### View helpers worth knowing
@@ -215,7 +215,7 @@ Full references ship in the local docs: `node_modules/@spree/docs/dist/developer
 
 ## Decorating admin controllers
 
-The Spree admin controllers are normal Rails controllers — you can decorate them like any other. Scaffold the file with `spree generate controller_decorator Spree::Admin::ProductsController` — it emits `backend/app/controllers/spree/admin/products_controller_decorator.rb` with the `prepended` hook and the `prepend` wiring:
+The Spree admin controllers are normal Rails controllers — you can decorate them like any other. Scaffold the file with `spree generate controller_decorator Spree::Admin::ProductsController` — it emits `backend/app/controllers/spree/admin/products_controller_decorator.rb` with the `prepended` hook and the `prepend` wiring (the generator nests the modules and puts the fully-qualified `prepend` line outside; this equivalent hand-written form is more compact):
 
 ```ruby
 # backend/app/controllers/spree/admin/products_controller_decorator.rb
@@ -229,9 +229,9 @@ module Spree::Admin::ProductsControllerDecorator
   def my_custom_check
     # ...
   end
-
-  Spree::Admin::ProductsController.prepend self
 end
+
+Spree::Admin::ProductsController.prepend Spree::Admin::ProductsControllerDecorator
 ```
 
 This is more invasive than nav/table customization — only reach for it when the action's behavior needs to change. Check whether a subscriber (for side effects) or a service swap (for business logic) would work first. See the `spree-project` skill for the full customization decision tree.

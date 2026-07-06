@@ -42,7 +42,7 @@ These must be set on every Spree deployment:
 
 Authentication is hardcoded to `plain` (with STARTTLS) in spree-starter's production.rb — edit that file if your provider needs a different mechanism.
 
-If `SMTP_HOST` is unset, dev uses the `letter_opener` gem (emails open in the browser instead of being sent). In production there is no fallback: no delivery method is configured, so ActionMailer stays on Rails' default `:smtp` pointing at localhost:25 and deliveries fail unless a local MTA is running — always set the SMTP vars in production. (Note: the official env-var docs claim emails are "logged to stdout" when SMTP_HOST is unset; the spree-starter code does not do this.) Many merchants use Postmark / SendGrid / Resend — set the SMTP vars and you're done.
+If `SMTP_HOST` is unset, dev uses the `letter_opener` gem (emails open in the browser instead of being sent). In production there is no fallback: no delivery method is configured, so ActionMailer stays on Rails' default `:smtp` pointing at localhost:25 and deliveries fail unless a local MTA is running — always set the SMTP vars in production. (The official env-var docs state this correctly; the *emails* doc claims unsent emails are "printed to the Rails log", which the spree-starter code does not do.) Many merchants use Postmark / SendGrid / Resend — set the SMTP vars and you're done.
 
 ### File storage (ActiveStorage)
 
@@ -51,8 +51,8 @@ Spree's product images, customer uploads, and admin assets go through ActiveStor
 | Backend | Variables | Notes |
 |---|---|---|
 | Local disk | (none) | Default. Doesn't work on ephemeral filesystems (Heroku, K8s without persistent volumes) — files vanish on dyno restart. |
-| AWS S3 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_BUCKET` | Auto-detected. Spree's storage.yml has an :amazon service that activates when these are set. |
-| Cloudflare R2 | `CLOUDFLARE_ENDPOINT`, `CLOUDFLARE_ACCESS_KEY_ID`, `CLOUDFLARE_SECRET_ACCESS_KEY`, `CLOUDFLARE_BUCKET` | S3-compatible. Cheaper egress; same API. |
+| AWS S3 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_BUCKET` | Auto-detected: the `:amazon` service activates when the two access-key vars are set (region/bucket are read via storage.yml with defaults). |
+| Cloudflare R2 | `CLOUDFLARE_ENDPOINT`, `CLOUDFLARE_ACCESS_KEY_ID`, `CLOUDFLARE_SECRET_ACCESS_KEY`, `CLOUDFLARE_BUCKET` | S3-compatible. Cheaper egress; same API. Auto-detected when the two access-key vars **and** `CLOUDFLARE_ENDPOINT` are set. |
 | GCS / Azure | Standard ActiveStorage config | Spree doesn't ship special integration; use ActiveStorage's standard configuration in `config/storage.yml`. |
 
 For production, always use an object store — local disk on ephemeral platforms loses files on restart.
@@ -88,34 +88,35 @@ Run at least one worker process. For high-traffic stores, run multiple worker pr
 
 ### Queue weights matter
 
-See the `spree-performance` skill for the full discussion. Queue names must match your app's `Spree.queues.*` mapping — out of the box every Spree queue maps to `:default`; spree-starter overrides them to `spree_`-prefixed names in `config/initializers/spree.rb`. Any queue missing from the worker's list never gets processed. Using spree-starter's naming (its shipped `config/sidekiq.yml` is the safe baseline — adjust weights, don't drop queues):
+See the `spree-performance` skill for the full discussion. Queue names must match your app's `Spree.queues.*` mapping — out of the box every Spree queue maps to `:default`; spree-starter overrides them to `spree_`-prefixed names in `config/initializers/spree.rb`. Any queue missing from the worker's list never gets processed. This is spree-starter's shipped `config/sidekiq.yml` (the safe baseline — adjust weights, don't drop queues):
 
 ```yaml
 # config/sidekiq.yml
+:concurrency: <%= Integer(ENV.fetch('SIDEKIQ_CONCURRENCY', '25')) %>
 :queues:
+  - [default, 5]
+  - [spree_imports, 5]
   - [spree_payment_webhooks, 5]
-  - [mailers, 4]
-  - [spree_events, 4]
-  - [default, 3]
+  - [mailers, 5]
+  - [spree_events, 3]
+  - [spree_exports, 3]
+  - [spree_images, 3]
+  - [spree_products, 3]
+  - [spree_reports, 3]
+  - [spree_variants, 3]
+  - [spree_taxons, 3]
+  - [spree_stock_location_stock_items, 3]
+  - [spree_coupon_codes, 3]
+  - [spree_addresses, 3]
+  - [spree_gift_cards, 3]
   - [spree_webhooks, 3]
-  - [spree_imports, 2]
-  - [spree_exports, 2]
-  - [spree_search, 2]
-  - [spree_products, 2]
-  - [spree_variants, 2]
-  - [spree_taxons, 2]
-  - [spree_stock_location_stock_items, 2]
-  - [spree_coupon_codes, 2]
-  - [spree_addresses, 2]
-  - [spree_gift_cards, 2]
-  - [spree_reports, 2]
-  - [spree_api_keys, 2]
-  - [spree_images, 1]
+  - [spree_api_keys, 3]
+  - [spree_search, 3]
   - [active_storage_analysis, 1]
   - [active_storage_purge, 1]
 ```
 
-Payment webhooks block the customer (they're waiting for the redirect-back); image processing is fine to lag. Without weights, image jobs flood and delay payment events.
+When tuning weights, keep payment webhooks near the top — they block the customer (who is waiting on the redirect-back) — while image processing is fine to lag behind.
 
 ### Sidekiq Pro / Enterprise
 
@@ -130,7 +131,7 @@ After every deploy, run database migrations AND the upgrade rake task. On Heroku
 release: bundle exec rake spree:install:migrations db:migrate && bundle exec rake spree:upgrade
 ```
 
-On Render:
+On Render (recommended config — note spree-starter's shipped `render.yaml` doesn't do this yet: it runs `db:prepare` inside `buildCommand` and never runs `spree:upgrade`):
 
 ```yaml
 # render.yaml
@@ -200,7 +201,7 @@ And run migrations via the release-phase command above.
 
 - Native PostgreSQL + Redis addons inject the URLs.
 - Persistent disks are available for ActiveStorage local backend (cheaper than S3 for low-traffic stores) — but only on Render's paid tier.
-- Set `preDeployCommand` in render.yaml.
+- Set `preDeployCommand` in render.yaml (spree-starter's shipped render.yaml instead runs `db:prepare` in `buildCommand` — migrating it to `preDeployCommand` is the safer pattern).
 
 ### Fly.io
 
@@ -234,8 +235,9 @@ Spree::Store.create!(name: 'My Store', url: ENV['RAILS_HOST'], code: 'my-store',
 
 ### "Sidekiq dashboard returns 401"
 
-The dashboard at `/sidekiq` is auth-protected by default. spree-starter already mounts it in `config/routes.rb` (app root — there is no `backend/` directory):
+The dashboard at `/sidekiq` is auth-protected by default. spree-starter already mounts it in `config/routes.rb` (the Rails root — that's the repo root in a standalone spree-starter deploy; create-spree-app projects nest it under `backend/`). Effectively:
 ```ruby
+# shipped code derives the scope: Spree.admin_user_class.model_name.singular_route_key.to_sym
 authenticate :spree_admin_user, ->(admin_user) { admin_user.spree_admin? } do
   mount Sidekiq::Web => '/sidekiq'
 end

@@ -9,7 +9,7 @@ description: Use when the user wants to swap how a core Spree service computes �
 
 `Spree.dependencies` is the canonical way to replace a core Spree service with your own implementation — no fork, no monkey-patch, no decorator. You inherit from the Spree default, override the methods you need, and register your class as the dependency. Spree's own code calls your service everywhere it used to call the default.
 
-The core has **70 injection points**; the API has **302 more** for serializers, finders, and per-endpoint services. The full set is documented at `node_modules/@spree/docs/dist/developer/customization/dependencies.md`.
+The core has **70+ injection points** (71 in 5.5); the API has **300+ more** (303 in 5.5) for serializers, finders, and per-endpoint services. The full set is documented at `node_modules/@spree/docs/dist/developer/customization/dependencies.md`.
 
 ## When to reach for this vs other patterns
 
@@ -200,6 +200,8 @@ Loads every registered dependency and confirms it points to a real class. Catche
   [Core] cart_add_item_service: uninitialized constant MyApp::Cart::AddIem
 ```
 
+**Caveat (5.5):** the task walks *every* injection point, including the legacy v2 slots (`storefront_*`, `platform_*`) whose defaults still name deleted `Spree::V2::Storefront::*` / `Spree::Api::V2::Platform::*` classes — so a clean install already reports dozens of pre-existing `[API]` failures. Grep the output for your own class names (or scope your check to Core) rather than expecting a green run.
+
 Wire this into CI on any project that overrides dependencies. Typos here are silent at boot and only surface when the affected code path runs in production.
 
 ## Programmatic introspection
@@ -229,7 +231,7 @@ Spree::Dependencies.validate!
 
 The injection points are grouped by domain. The list is too long to enumerate in full; this is the categorical map. Run `spree rake spree:dependencies:list` to see the full set for the installed version.
 
-### Core (70 injection points)
+### Core (71 injection points in 5.5)
 
 | Category | Examples |
 |---|---|
@@ -252,7 +254,7 @@ The injection points are grouped by domain. The list is too long to enumerate in
 | Sorters / Paginators | (per-resource sort + pagination) |
 | Ability | `ability_class` — the CanCanCan ability class |
 
-### API (302 injection points)
+### API (303 injection points in 5.5)
 
 | Category | Examples |
 |---|---|
@@ -345,7 +347,7 @@ Spree.cart_add_item_service = MyApp::Cart::AddItem  # ← this is all you need
 
 The v3 controllers call `Spree.cart_add_item_service` (the core injection point) directly and resolve it lazily at request time, so an override in `config/initializers/spree.rb` takes effect for API requests too.
 
-The `Spree.api.storefront_*` service points are leftovers from the removed API v2 (marked "Legacy API v2 dependencies — will be removed in Spree 6" in `spree_api/lib/spree/api/dependencies.rb`). Nothing consumes them anymore — assigning `Spree.api.storefront_cart_add_item_service` is a no-op. Don't rely on their "cascade" either: their proc defaults are snapshotted once, when `Spree::Api::Dependencies` is instantiated in an engine initializer that runs *before* your app's initializers — so core overrides set in `config/initializers/spree.rb` never propagate into them. They'll still appear in `spree:dependencies:list` output showing the stale boot-time value; ignore them.
+The `Spree.api.storefront_*` service points are leftovers from the removed API v2 (marked "Legacy API v2 dependencies — will be removed in Spree 6" in the `spree_api` gem's `lib/spree/api/dependencies.rb`). Nothing consumes them anymore — assigning `Spree.api.storefront_cart_add_item_service` is a no-op. Don't rely on their "cascade" either: their proc defaults are snapshotted once, when `Spree::Api::Dependencies` is instantiated in an engine initializer that runs *before* your app's initializers — so core overrides set in `config/initializers/spree.rb` never propagate into them. They'll still appear in `spree:dependencies:list` output showing the stale boot-time value; ignore them.
 
 ### Initializer load order
 
@@ -353,9 +355,9 @@ Dependency overrides go in `config/initializers/spree.rb`. Multiple extensions s
 
 ## Where to read further
 
-- **Canonical docs:** `node_modules/@spree/docs/dist/developer/customization/dependencies.md`
-- **Core injection point list:** `Spree::Core::Dependencies::INJECTION_POINTS_WITH_DEFAULTS` in `spree_core/lib/spree/core/dependencies.rb`
-- **API injection point list:** `Spree::Api::ApiDependencies::INJECTION_POINTS_WITH_DEFAULTS` in `spree_api/lib/spree/api/dependencies.rb` (`Spree::Api::Dependencies` is an instance of this class)
+- **Docs:** `node_modules/@spree/docs/dist/developer/customization/dependencies.md` — note this published page still describes the **legacy v2** injection points (`storefront_*`, `Spree::V2::Storefront::*` defaults); treat the source constants below as authoritative for 5.5.
+- **Core injection point list:** `Spree::Core::Dependencies::INJECTION_POINTS_WITH_DEFAULTS` in the installed `spree_core` gem, `lib/spree/core/dependencies.rb`
+- **API injection point list:** `Spree::Api::ApiDependencies::INJECTION_POINTS_WITH_DEFAULTS` in the installed `spree_api` gem, `lib/spree/api/dependencies.rb` (`Spree::Api::Dependencies` is an instance of this class)
 - **`Spree::ServiceModule::Base`** — the base class behind the `run :step_name` orchestration
 - **For deciding whether to swap a service vs use events vs decorate:** the `spree-customization` skill
 - **For installing third-party Spree gems that ship dependency overrides:** the `spree-extensions` skill

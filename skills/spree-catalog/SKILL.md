@@ -90,7 +90,7 @@ red = color.option_values.create!(name: 'red', presentation: 'Red', color_code: 
 
 ## Categories (formerly Taxons)
 
-Spree 5.5 added `Spree::Category` as an alias of `Spree::Taxon` — the merchant-facing concept for the hierarchical product grouping.
+Spree 5.5 added `Spree::Category`, a subclass of `Spree::Taxon` — the merchant-facing concept for the hierarchical product grouping.
 
 ```
 Category (hierarchical — left/right via awesome_nested_set)
@@ -99,7 +99,7 @@ Category (hierarchical — left/right via awesome_nested_set)
   └── i18n on name + description
 ```
 
-Code can use either `Spree::Category` or `Spree::Taxon` — they point at the same model. Use `Spree::Category` in new code; the legacy class name remains for backwards compatibility.
+`Spree::Category < Spree::Taxon`, sharing the `spree_taxons` table — but they are not interchangeable: a Category is owned directly via `store_id` and needs no `Taxonomy` (it default-scopes to manually-curated taxons), while a plain `Taxon` requires a parent `Taxonomy`. Use `Spree::Category` in new code; `Spree::Taxon` remains for backwards compatibility.
 
 ```ruby
 shirts = Spree::Category.find_by(permalink: 'men/shirts')
@@ -197,7 +197,7 @@ For currency-wide price changes, batch via `Spree::Price.where(currency: 'USD').
 
 ### "Add a custom field to Products"
 
-Use Metafields (5.4) — no decorator, no schema change. First create a `MetafieldDefinition` (in the admin or via seed/migration) with a namespace + key + type + `display_on` (`front_end`, `back_end`, or `both`). Then set values per record:
+Use Metafields (5.4) — no decorator, no schema change. First create a `MetafieldDefinition` (in the admin or via seed/migration) with a namespace + key + type + `display_on` (`back_end` or `both` — the admin UI doesn't offer a `front_end`-only option for metafields). Then set values per record:
 
 ```ruby
 product.set_metafield('catalog.season', 'fall-2026')

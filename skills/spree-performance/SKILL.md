@@ -122,7 +122,7 @@ The right choice for medium-to-large catalogs.
 
 ## Image processing
 
-Spree uses ActiveStorage and pre-generates product image variants at upload time. `Spree::Asset` declares a named ActiveStorage variant per entry in `Spree::Config.product_image_variant_sizes` (defaults: mini 128, small 256, medium 400, large 720, xlarge 2000, og_image 1200×630) as webp `resize_to_fill` with `preprocessed: true`, so ActiveStorage enqueues transform jobs in the background when the image is attached — no first-request processing on the web tier. The Store API serves exactly these named variants (`mini_url`, `small_url`, …).
+Spree uses ActiveStorage and pre-generates product image variants at upload time. `Spree::Asset` declares a named ActiveStorage variant per entry in `Spree::Config.product_image_variant_sizes` (defaults: mini 128, small 256, medium 400, large 720, xlarge 2000, og_image 1200×630) as webp `resize_to_fill` with `preprocessed: true`, so ActiveStorage enqueues transform jobs in the background when the image is attached — no first-request processing on the web tier. The Store API's media serializer serves exactly these named variants (`mini_url`, `small_url`, …).
 
 ### Performance levers
 
@@ -207,5 +207,5 @@ Only the Store API catalog controllers (products, categories, countries, currenc
 
 - **Cart pipeline:** `Spree::Cart::Recalculate` and its dependencies in `spree_core/app/services/spree/cart/`.
 - **Search provider:** `Spree::SearchProvider::Base` and `Spree::SearchProvider::Meilisearch` in the installed `spree_core` gem.
-- **Deployment caching:** `node_modules/@spree/docs/dist/developer/deployment/caching.mdx`.
-- **Search + filtering:** `node_modules/@spree/docs/dist/developer/core-concepts/search-filtering.mdx`.
+- **Deployment caching:** `node_modules/@spree/docs/dist/developer/deployment/caching.md`.
+- **Search + filtering:** `node_modules/@spree/docs/dist/developer/core-concepts/search-filtering.md`.

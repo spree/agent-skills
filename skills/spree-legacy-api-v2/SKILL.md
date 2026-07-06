@@ -136,7 +136,7 @@ The migration is **per-endpoint**. You don't need to flip everything at once; v2
 |---|---|
 | OAuth2 password grant for customer login | JWT login at `/api/v3/store/auth/login` (returns `token` + `refresh_token` + `user`) |
 | OAuth2 client_credentials for admin apps | Secret key (`sk_*`) with scoped permissions |
-| `Authorization: Bearer <token>` | `X-Spree-API-Key: <pk_…\|sk_…>` + optional `Authorization: Bearer <jwt>` |
+| `Authorization: Bearer <token>` | `X-Spree-Api-Key: <pk_…\|sk_…>` + optional `Authorization: Bearer <jwt>` |
 | `X-Spree-Order-Token` for guest carts | Still `X-Spree-Token` (renamed) |
 
 For admin apps: generate a secret key via the admin UI (Settings → Developers → API Keys, key type 'Secret') with the required scopes. Drop OAuth2 entirely.

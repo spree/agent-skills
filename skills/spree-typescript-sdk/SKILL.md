@@ -52,7 +52,7 @@ await client.carts.items.create(cart.id, { variant_id: 'variant_…', quantity: 
 
 ### Resource shape
 
-Every resource exposes the same five methods (subject to per-resource availability):
+Resources follow one method vocabulary:
 
 ```ts
 client.<resource>.list(params?, options?)              // GET   index
@@ -61,6 +61,8 @@ client.<resource>.create(body, options?)               // POST  create
 client.<resource>.update(id, body, options?)           // PATCH update
 client.<resource>.delete(id, options?)                 // DELETE
 ```
+
+Full five-method CRUD is an **Admin SDK** property. On the **Store SDK** most resources are read-only or partial — `products` exposes only `list`/`get`/`filters`; `categories`, `countries`, `orders`, `policies`, `markets`, `currencies`, `locales` are read-only; `customers` exposes only `create`. Store writes are limited to carts, wishlists, and the customer's own account/addresses; catalog writes require the Admin SDK. If a method doesn't typecheck, it doesn't exist on that surface — don't force it.
 
 Method name is always `get`, never `show`. The delete method is `delete`, not `destroy`. Nested resources (e.g. `client.carts.items.create(cartId, params, options)`) take the parent prefixed ID as the first positional argument.
 
@@ -136,7 +138,7 @@ const client = createClient({
 const client = createClient({ baseUrl, publishableKey, retry: false })
 ```
 
-Defaults: 2 retries, exponential backoff with jitter (300ms base, capped at 10s), retries on 429/500/502/503/504 + network errors. Honors `Retry-After` headers. Mutating requests get an auto-generated `Idempotency-Key` so they can be retried safely.
+Defaults: 2 retries, exponential backoff with jitter (300ms base, capped at 10s), retries on 429/500/502/503/504 + network errors. Honors `Retry-After` headers. The 5xx statuses only retry for idempotent requests — GET/HEAD, or any request carrying an `Idempotency-Key`; since mutating requests get an auto-generated `Idempotency-Key` when retries are on, they're covered too. Non-keyed mutations retry on 429 only.
 
 ### Custom fetch (testing, server-only, etc.)
 
@@ -236,7 +238,7 @@ const admin = createAdminClient({
   storeId: 'store_k5nR8xLq',                         // optional multi-store routing
 })
 
-const { data: orders } = await admin.orders.list({ state_eq: 'complete' })
+const { data: orders } = await admin.orders.list({ status_eq: 'placed' })   // status (5.5) not state — state is removed in Spree 6
 ```
 
 The secret key carries scopes (`read_orders`, `write_products`, etc.) — see `spree-api-v3` for the scope list. Requests for endpoints outside the key's scopes get 403.
@@ -283,7 +285,7 @@ For example, a CSV export flow:
 ```ts
 const exportRecord = await admin.exports.create({
   type: 'Spree::Exports::Orders',
-  search_params: { state_eq: 'complete' },
+  search_params: { status_eq: 'placed' },
 })
 // poll admin.exports.get(exportRecord.id) until done === true, then fetch
 // download_url with Authorization: Bearer <jwt> and create a Blob —

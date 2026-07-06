@@ -51,20 +51,20 @@ end
 class OrderCompleteSubscriber < Spree::Subscriber
   subscribes_to 'order.completed'
 
-  def call(event)
+  def handle(event)
     order_id = event.payload['id']
     ExternalErp.sync_order(order_id)
   end
 end
 ```
 
-The default handler method is `call(event)`. Subscribers run **asynchronously** via `Spree::Events::SubscriberJob` by default; opt into synchronous execution only when the side effect must complete before the publisher's transaction returns:
+The handler method is `handle(event)` (or route with the `on` DSL below). Don't override `call` — the base `call` is the dispatch entry that routes `on`-declared handlers and falls back to `handle`, so overriding it silently disables `on` routing. Subscribers run **asynchronously** via `Spree::Events::SubscriberJob` by default; opt into synchronous execution only when the side effect must complete before the publisher's transaction returns:
 
 ```ruby
 class CriticalOrderHandler < Spree::Subscriber
   subscribes_to 'order.completed', async: false
 
-  def call(event)
+  def handle(event)
     # Runs inline, blocks the publisher
   end
 end
@@ -78,7 +78,7 @@ Single handler, dispatch on `event.name`:
 class OrderActivitySubscriber < Spree::Subscriber
   subscribes_to 'order.completed', 'order.paid', 'order.shipped'
 
-  def call(event)
+  def handle(event)
     case event.name
     when 'order.completed' then track_completion(event)
     when 'order.paid'      then track_payment(event)
@@ -117,7 +117,7 @@ Wildcards subscribe to a family of events:
 class OrderEventLogger < Spree::Subscriber
   subscribes_to 'order.*'
 
-  def call(event)
+  def handle(event)
     Rails.logger.info("Order event: #{event.name}")
   end
 end
@@ -136,7 +136,7 @@ For each Spree::WebhookEndpoint subscribed_to?('order.completed'):
   ↓
 Create Spree::WebhookDelivery (queued)
   ↓
-Spree::WebhookDeliveryJob (Sidekiq) → POST to endpoint URL
+Spree::WebhookDeliveryJob (ActiveJob, on Spree.queues.webhooks) → POST to endpoint URL
   ↓
 On failure: delivery recorded as failed (manual redeliver available)
 On 15 consecutive failures: auto-disable endpoint
@@ -150,7 +150,7 @@ Via API:
 
 ```bash
 curl -X POST https://my-spree.example.com/api/v3/admin/webhook_endpoints \
-  -H "X-Spree-API-Key: sk_…" \
+  -H "X-Spree-Api-Key: sk_…" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Order sync to ERP",
@@ -240,9 +240,9 @@ function verifyWebhook(req: Request): boolean {
 
 ### Retry + auto-disable
 
-Failed deliveries (timeout, 5xx, connection error) are recorded on the delivery record — Spree does **not** automatically retry a failed delivery. Retry manually with `delivery.redeliver!` (creates a fresh delivery and queues it), the admin UI's redeliver button on the delivery page, or `POST /api/v3/admin/webhook_endpoints/:webhook_endpoint_id/deliveries/:id/redeliver`. After **15 consecutive failures**, the endpoint auto-disables and an email goes to store staff (`Spree::WebhookMailer.endpoint_disabled`).
+Failed deliveries (timeout, 5xx, connection error) are recorded on the delivery record — Spree does **not** automatically retry a failed delivery. (Don't be misled by the `retry_on StandardError, attempts: 5` on `WebhookDeliveryJob`: `DeliverWebhook` rescues HTTP/timeout errors and records them as failed without re-raising, so that ActiveJob retry path never fires for ordinary delivery failures.) Retry manually with `delivery.redeliver!` (creates a fresh delivery and queues it), the admin UI's redeliver button on the delivery page, or `POST /api/v3/admin/webhook_endpoints/:webhook_endpoint_id/deliveries/:id/redeliver`. After **15 consecutive failures**, the endpoint auto-disables and an email goes to store staff (`Spree::WebhookMailer.endpoint_disabled`).
 
-Re-enable via `endpoint.enable!` or by toggling `active: true` in the admin UI. A successful delivery resets the failure counter.
+Re-enable via `endpoint.enable!` or by toggling `active: true` in the admin UI. A more recent successful delivery breaks the consecutive-failure streak (the check queries recent deliveries — there's no stored counter).
 
 Inspect failures:
 
@@ -272,7 +272,7 @@ In production, endpoint URLs are validated against private IP ranges (RFC 1918, 
 |---|---|
 | `order.completed` | Customer finalizes the order (post-payment) |
 | `order.paid` | All payments processed successfully |
-| `order.shipped` | At least one shipment is marked shipped |
+| `order.shipped` | All of the order's shipments are marked shipped (`order.fully_shipped?`) — a partial shipment doesn't fire it |
 | `order.approved` | An admin approves a pending order |
 | `order.canceled` | Order is canceled |
 | `order.resumed` | A canceled order is reactivated |
@@ -440,7 +440,7 @@ end
 
 ```bash
 curl -X POST https://my-spree.example.com/api/v3/admin/webhook_endpoints \
-  -H "X-Spree-API-Key: sk_…" \
+  -H "X-Spree-Api-Key: sk_…" \
   -d '{"url":"https://partner.example.com/spree","subscriptions":["order.*"]}'
 ```
 
@@ -485,7 +485,7 @@ end
 2. **Subscribed?** `endpoint.subscribed_to?('order.completed')` should be true.
 3. **URL reachable?** `endpoint.send_test!` then check `endpoint.webhook_deliveries.last`.
 4. **SSRF blocking?** In production, private IPs are rejected. Check `endpoint.errors` if you can't save.
-5. **Sidekiq running?** `WebhookDeliveryJob` is async. If Sidekiq is down, deliveries pile up in the queue.
+5. **Job backend running?** `WebhookDeliveryJob` is async (ActiveJob). If your worker (e.g. Sidekiq) is down, deliveries pile up in the queue.
 
 ### "Signatures don't verify"
 

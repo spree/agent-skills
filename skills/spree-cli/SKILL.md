@@ -31,16 +31,17 @@ If not installed: `npm i -g @spree/cli` (or run via `pnpm exec spree` / `npx @sp
 
 Credentials resolve in this order (first match wins); host and key always resolve **together** per source:
 
-1. **Inside a local Spree project** (a dir with `docker-compose.yml`, dev stack running): zero config. The first `spree api` call mints a **read-only** key via the dev stack and saves it to `.spree/credentials.json` (gitignored). Just run commands.
-2. **Any server via env** — set `SPREE_API_KEY`; the host defaults to `http://localhost:3000`, so local dev needs only the key. Set `SPREE_BASE_URL` for a remote store:
+1. **Explicit flags** — `--api-key sk_xxx`, or `--profile prod` to select a saved profile. Outrank everything below.
+2. **Env** — set `SPREE_API_KEY`; the host defaults to `http://localhost:3000`, so local dev needs only the key. Set `SPREE_BASE_URL` for a remote store. Note an exported `SPREE_API_KEY` **outranks a local project's saved key**:
    ```bash
    SPREE_API_KEY=sk_xxx spree api get /products            # → localhost:3000
    SPREE_BASE_URL=https://store.example.com SPREE_API_KEY=sk_xxx spree api get /orders
    ```
-3. **Saved profile** for a remote store (key read from a prompt, never a flag):
+3. **Inside a local Spree project** (a dir with `docker-compose.yml`, dev stack running): zero config. The first `spree api` call mints a **read-only** key via the dev stack and saves it to `.spree/credentials.json` (gitignored). Just run commands.
+4. **Default profile** (the first profile you `spree auth login` becomes the default; key read from a prompt, never a flag):
    ```bash
    spree auth login --profile prod --base-url https://store.example.com
-   spree api get /orders --profile prod
+   spree api get /orders --profile prod    # or omit --profile once it's the default
    ```
 
 Confirm what's resolved and that the server is reachable:

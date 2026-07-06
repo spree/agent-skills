@@ -26,7 +26,7 @@ Users run Spree in their own infrastructure — there's no Spree cloud. Everythi
 - All models inherit from `Spree.base_class` — not `ApplicationRecord` directly.
 - Use `Spree.user_class` and `Spree.admin_user_class` instead of `Spree::User` so apps can swap the user model.
 - Always scope queries through `current_store` (e.g. `current_store.orders`, not `Spree::Order.all`). Multi-store apps share a database; un-scoped queries leak data across stores.
-- Use string columns instead of Rails enums.
+- State/status fields on state-machine models (Order, Payment, Shipment) are string columns — don't convert them to Rails enums. (Core does use integer enums for a few non-workflow fields like `Promotion#kind`; string + state machine is still the default for anything with transitions.)
 - IDs are treated as strings (Stripe-style prefixed IDs at the API surface; integer PKs internally — never `.to_i` an ID).
 - State machines use the `state_machines-activerecord` gem.
 - Uniqueness validations use `scope: spree_base_uniqueness_scope` plus a DB index.
@@ -79,6 +79,9 @@ spree sample-data           # load sample data (products, categories, images)
 spree user create           # create an admin user (interactive, or --email/--password)
 spree api-key create|list|revoke   # manage publishable/secret API keys (--type publishable|secret)
 spree open                  # open the admin dashboard in the browser
+spree api <verb> <path>     # generic Admin API client (see skills/spree-cli/SKILL.md)
+spree auth login            # save a credentials profile for a remote store
+spree completion <shell>    # bash/zsh/fish shell completions
 ```
 
 For the full command reference see `dist/developer/cli/quickstart.md` in the installed `@spree/docs` package (source: `docs/developer/cli/quickstart.mdx` in the spree monorepo).
@@ -151,8 +154,8 @@ When the task domain matches one of these, read the corresponding `skills/<name>
 ## What NOT to do
 
 - Don't write `Spree::User.find(...)` — use `Spree.user_class.find(...)`.
-- Don't add foreign key constraints in migrations (Spree convention).
-- Don't add Rails enum columns — use strings.
+- Don't add foreign key constraints in migrations on business tables — Spree's generators emit `foreign_key: false` (the only FKs in the schema come from ActiveStorage and the Mobility translation tables).
+- Don't model state/status fields as Rails enums — use string columns (+ a state machine where transitions matter).
 - Don't drop or truncate `spree_*` tables in development without backup. The `spree/agent-skills` plugin's safety hook blocks the most dangerous of these automatically when installed via `/plugin install spree@spree` in Claude Code (DROP TABLE on any `spree_*` table, `db:drop`/`db:reset`, and TRUNCATE or mass-deletes of orders, payments, users); other tables and other tools aren't covered.
 - Don't bypass `current_store` scoping in custom controllers.
 - Don't expose raw integer IDs in API responses — always prefixed IDs (`prod_…`, `or_…`).

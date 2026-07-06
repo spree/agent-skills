@@ -1,6 +1,6 @@
 ---
 name: spree-api-v3
-description: Use when the user is integrating with Spree's v3 REST API — making requests as a customer, building an admin app, writing webhook consumers, debugging auth errors, parsing API responses. Distinguishes the Store API (customer-facing) from the Admin API (back-office). Common phrasings include "Spree API", "Store API", "Admin API", "publishable key", "secret key", "X-Spree-API-Key", "API scopes", "prefixed IDs in API", "expand", "API pagination", "Spree 401", "Spree 403", "{data, meta} envelope", "v3 endpoint". For ADDING a new resource to the API, use the spree-resource skill instead.
+description: Use when the user is integrating with Spree's v3 REST API — making requests as a customer, building an admin app, writing webhook consumers, debugging auth errors, parsing API responses. Distinguishes the Store API (customer-facing) from the Admin API (back-office). Common phrasings include "Spree API", "Store API", "Admin API", "publishable key", "secret key", "X-Spree-Api-Key", "API scopes", "prefixed IDs in API", "expand", "API pagination", "Spree 401", "Spree 403", "{data, meta} envelope", "v3 endpoint". For ADDING a new resource to the API, use the spree-resource skill instead.
 ---
 
 # Spree API v3
@@ -20,19 +20,19 @@ They share conventions (envelope shape, prefixed IDs, pagination) but have **dif
 
 **Who calls it:** customer browsers and apps. Public, untrusted clients.
 
-**Auth:** Always include `X-Spree-API-Key: pk_<token>` (a publishable key). Additional layers:
+**Auth:** Always include `X-Spree-Api-Key: pk_<token>` (a publishable key). Additional layers:
 - **Anonymous browse:** publishable key alone is enough for reading products, categories.
 - **Guest cart:** publishable key + `X-Spree-Token: <cart_token>` for operations on a specific guest cart.
 - **Logged-in customer:** publishable key + `Authorization: Bearer <jwt>` for account data, order history.
 
-**What's exposed:** customer-visible fields only. No timestamps (`created_at`/`updated_at` are NOT in Store responses). No cost prices, no admin internal notes, no private metadata.
+**What's exposed:** customer-visible fields only. Catalog and order Store serializers omit `created_at`/`updated_at`, exposing business dates instead (`available_on`, `completed_at`); a few resources (digitals, newsletter subscriptions) do include timestamps. No cost prices, no admin internal notes, no private metadata.
 
 **What actions are enabled:** read-only by default. `index` and `show` for catalog endpoints. Cart/customer/address endpoints opt into `create`/`update`/`destroy`.
 
 **Channel scope:** Store responses are scoped by `X-Spree-Channel: <code>` (e.g. `online`, `pos`). When omitted, the store's default channel is used. Products not published on the requested channel don't appear.
 
 ```bash
-curl -H "X-Spree-API-Key: pk_CzEKBTWFiuNLgz4wciLsS59n" \
+curl -H "X-Spree-Api-Key: pk_CzEKBTWFiuNLgz4wciLsS59n" \
      -H "X-Spree-Channel: online" \
      -H "Accept-Language: en-US" \
      https://my-spree.example.com/api/v3/store/products
@@ -47,16 +47,17 @@ curl -H "X-Spree-API-Key: pk_CzEKBTWFiuNLgz4wciLsS59n" \
 **Path 1: Secret key with scopes** — for server-to-server apps and integrations.
 
 ```bash
-curl -H "X-Spree-API-Key: sk_…" \
+curl -H "X-Spree-Api-Key: sk_…" \
      https://my-spree.example.com/api/v3/admin/orders
 ```
 
 Secret keys (`sk_*` prefix) carry **scopes** that gate which endpoints they can hit. Scopes are granted at key creation. Each request's scope is enforced by `ScopedAuthorization`; missing scope = 403.
 
-The scope list (5.5):
+The scope list (5.5, from `Spree::ApiKey::SCOPES`):
 ```
 read_orders               write_orders
 read_products             write_products
+read_promotions           write_promotions
 read_customers            write_customers
 read_payments             write_payments
 read_fulfillments         write_fulfillments
@@ -65,13 +66,14 @@ read_gift_cards           write_gift_cards
 read_store_credits        write_store_credits
 read_stock                write_stock
 read_categories           write_categories
-read_custom_field_definitions  write_custom_field_definitions
-read_exports              write_exports
 read_settings             write_settings
 read_webhooks             write_webhooks
+read_api_keys             write_api_keys
 read_dashboard
 read_all                  write_all     # superset (full admin)
 ```
+
+Some endpoints map onto these rather than having their own pair: custom-field-definition endpoints require `read_settings`/`write_settings`, and export endpoints resolve their required scope per request (there is no `read_exports`/`write_exports` scope).
 
 This is the right path for **building an app or integration**. The app gets a minimum-privilege secret key from the merchant; no human user is involved. Audit-friendly (you know exactly which app made each request).
 
@@ -182,6 +184,14 @@ curl '/api/v3/store/products/cool-shirt?expand=variants.media'
 
 Allowed expand keys are per-resource and listed in the OpenAPI spec.
 
+### Sparse fieldsets
+
+The inverse of `expand`: pass `fields=name,slug` to trim the response to just those attributes (`id` and any expanded associations are always retained):
+
+```bash
+curl '/api/v3/store/products?fields=name,slug'
+```
+
 ## Pagination
 
 ```bash
@@ -201,8 +211,8 @@ GET /api/v3/store/products?q[name_cont]=shirt
 # Orders completed in the last 30 days
 GET /api/v3/admin/orders?q[completed_at_gteq]=2026-05-01
 
-# Multiple filters
-GET /api/v3/admin/orders?q[state_eq]=complete&q[total_gt]=100
+# Multiple filters — use `status` (draft/placed/canceled, new in 5.5), not the legacy `state` (removed in Spree 6)
+GET /api/v3/admin/orders?q[status_eq]=placed&q[total_gt]=100
 
 # Sort by completed_at descending
 GET /api/v3/admin/orders?q[s]=completed_at+desc
@@ -255,7 +265,7 @@ The API has per-key and per-endpoint rate limits configured via `Spree::Api::Con
 | `rate_limit_per_key` | 300 / 60s | General requests, per API key |
 | `rate_limit_window` | 60s | Window for the per-key counter |
 | `rate_limit_login` | 5 / 60s | `POST /api/v3/{store,admin}/auth/login` + admin invitation acceptance, per IP |
-| `rate_limit_register` | 3 / 60s | Register endpoint, per IP |
+| `rate_limit_register` | 3 / 60s | Customer register + newsletter subscribe endpoints, per IP |
 | `rate_limit_refresh` | 10 / 60s | Token refresh (store + admin) and store logout, per IP |
 | `rate_limit_password_reset` | 3 / 60s | Password reset, per IP |
 
@@ -273,7 +283,7 @@ When the underlying column has a legacy name, the model has an alias method (e.g
 
 ### "I'm getting 401 on every call"
 
-- Check `X-Spree-API-Key` header is set.
+- Check `X-Spree-Api-Key` header is set.
 - Verify the key is valid: `GET /api/v3/admin/me` returns 200 if your JWT is valid; otherwise 401.
 - Publishable key for Store API; secret OR JWT for Admin API. Mixing them = 401.
 
@@ -298,7 +308,7 @@ It doesn't — Webhooks 2.0 uses the same prefixed IDs as the API. If you're see
 
 ## Where to read further
 
-- **OpenAPI spec:** `node_modules/@spree/docs/dist/api-reference/store.yaml` — every endpoint, parameter, response schema. Authoritative.
+- **OpenAPI specs:** `node_modules/@spree/docs/dist/api-reference/store.yaml` (Store API) and `admin.yaml` (Admin API) — every endpoint, parameter, response schema. Authoritative.
 - **Adding a new endpoint:** see the `spree-resource` skill — `spree:api_resource` generator produces v3-conformant controllers + serializers automatically.
 - **SDK:** `@spree/sdk` (Store) and `@spree/admin-sdk` (Admin) — typed clients. See the `spree-typescript-sdk` skill.
 - **Customization:** `node_modules/@spree/docs/dist/developer/customization/api.md` and `authentication.md`

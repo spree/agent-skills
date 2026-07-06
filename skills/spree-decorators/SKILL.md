@@ -116,13 +116,13 @@ The final `.prepend` line is always fully qualified — no surprises about which
 Run the migration first (no foreign key constraint — keep it Spree-style):
 
 ```bash
-bin/rails g migration AddBrandIdToSpreeProducts brand_id:integer:index
+bin/rails g migration AddBrandIdToSpreeProducts brand_id:bigint:index
 ```
 
 ```ruby
 class AddBrandIdToSpreeProducts < ActiveRecord::Migration[7.2]
   def change
-    add_column :spree_products, :brand_id, :integer
+    add_column :spree_products, :brand_id, :bigint
     add_index :spree_products, :brand_id
   end
 end
@@ -167,7 +167,7 @@ end
 module Spree
   module ProductDecorator
     def self.prepended(base)
-      base.scope :featured, -> { where("metadata->>'featured' = ?", 'true') }
+      base.scope :featured, -> { where("public_metadata->>'featured' = ?", 'true') }
       base.scope :recently_added, -> { where('created_at > ?', 30.days.ago) }
     end
   end
@@ -177,6 +177,8 @@ end
 ```
 
 If you want this scope queryable from the API, also allowlist it via Ransack — see the Ransack note at the bottom.
+
+Note the SQL string names the real jsonb column: `public_metadata` or `private_metadata`. In Ruby, `metadata` is an alias method for `private_metadata` — but there is no `metadata` **column**, so `where("metadata->>…")` raises `PG::UndefinedColumn`. (For anything the storefront filters on, a real boolean column beats metadata anyway.)
 
 ### Add a new instance method
 
@@ -483,7 +485,7 @@ end
 class ProductSyncSubscriber < Spree::Subscriber
   subscribes_to 'product.updated'
 
-  def call(event)
+  def handle(event)
     product = Spree::Product.find_by_prefix_id(event.payload['id'])
     return unless product
 

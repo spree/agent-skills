@@ -139,7 +139,27 @@ Since Spree 5.5, *which* stock locations fulfill an order is decided by **Order 
 
 Each Shipment gets its own ShippingRate calculation (different origin = different rates). The customer pays each shipment's selected rate.
 
-For location-preference logic — distance-based, prefer-closest-warehouse, minimize splits — write a custom order routing rule or strategy, see `node_modules/@spree/docs/dist/developer/how-to/custom-order-routing.mdx`. For breaking one location's allocation into more packages (refrigerated, hazmat, gift wrap), write a custom splitter — see `node_modules/@spree/docs/dist/developer/how-to/custom-stock-splitter.mdx`.
+For location-preference logic — distance-based, prefer-closest-warehouse, minimize splits — write a custom order routing rule or strategy, see `node_modules/@spree/docs/dist/developer/how-to/custom-order-routing.md`. For breaking one location's allocation into more packages (refrigerated, hazmat, gift wrap), write a custom splitter — see `node_modules/@spree/docs/dist/developer/how-to/custom-stock-splitter.md`.
+
+### Manual fulfillments (3PL / external fulfillment)
+
+To mirror an externally-managed fulfillment back into Spree — a 3PL or courier API shipped part of a completed order — use `Spree::Fulfillments::Create` (5.5+) instead of hand-building shipments. It bypasses order routing, moves the requested not-yet-shipped units out of their current shipments into a new one, and handles the stock bookkeeping (restock at source / unstock at target when locations differ):
+
+```ruby
+result = Spree.fulfillment_create_service.call(
+  order: order,                       # must be completed, not canceled
+  stock_location: three_pl_location,
+  items: [{ line_item: li, quantity: 1 }],   # nil = everything not yet shipped
+  tracking: '1Z…',
+  delivery_method: shipping_method,   # defaults to the drained source shipment's
+  cost: '12.50',                      # explicit 3PL price; defaults to carrying over the source cost
+  status: 'shipped'                   # register as already shipped ('shipped' is the only accepted value; omit for pending)
+)
+
+result.valid? # true if the fulfillment was created successfully
+```
+
+Note an explicit `cost` sticks only with `status: 'shipped'` — pending fulfillments get re-priced by the rate engine on the next recalculation.
 
 ## Returns + Reverse Logistics
 
@@ -245,7 +265,7 @@ Walk this list:
 
 ### "Order ships from the wrong warehouse"
 
-Order Routing decides the location: the default `Spree::OrderRouting::Strategy::Rules` walks the channel's routing rules (preferred_location → minimize_splits → default_location baseline). Adjust the channel's `Spree::OrderRoutingRule` rows, or for closest-warehouse-wins write a custom routing rule (implementing `#rank(order, locations)`) or strategy — see `node_modules/@spree/docs/dist/developer/how-to/custom-order-routing.mdx`.
+Order Routing decides the location: the default `Spree::OrderRouting::Strategy::Rules` walks the channel's routing rules (preferred_location → minimize_splits → default_location baseline). Adjust the channel's `Spree::OrderRoutingRule` rows, or for closest-warehouse-wins write a custom routing rule (implementing `#rank(order, locations)`) or strategy — see `node_modules/@spree/docs/dist/developer/how-to/custom-order-routing.md`.
 
 ### "Shipping rate doesn't update when cart changes"
 
@@ -253,7 +273,7 @@ The rates are cached per Shipment after first calculation. When the cart changes
 
 ## Where to read further
 
-- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/shipments.mdx`, `inventory.mdx`
-- **Custom stock splitter:** `node_modules/@spree/docs/dist/developer/how-to/custom-stock-splitter.mdx`
-- **Custom order routing:** `node_modules/@spree/docs/dist/developer/how-to/custom-order-routing.mdx`
+- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/shipments.md`, `inventory.md`
+- **Custom stock splitter:** `node_modules/@spree/docs/dist/developer/how-to/custom-stock-splitter.md`
+- **Custom order routing:** `node_modules/@spree/docs/dist/developer/how-to/custom-order-routing.md`
 - **Stock services:** `Spree::Stock::Estimator`, `Spree::Stock::Packer`, `Spree::Stock::Prioritizer`, `Spree::Stock::Splitter::Base` (+ `ShippingCategory`/`Backordered`/`Digital`/`Weight` subclasses). Allocation goes through `Spree::OrderRouting::Strategy::Rules` by default; `Spree::Stock::Coordinator` is deprecated (slated for removal in 6.0) and survives only in the opt-in Legacy routing strategy, `Spree::Exchange`, and `Spree::Cart::EstimateShippingRates`.

@@ -39,9 +39,9 @@ spree migrate
 spree dev                 # Ctrl+C the running one first; `spree restart` does not reload Gemfile changes
 ```
 
-## Payment-provider gems bundled with `create-spree-app`
+## Extension gems bundled with `create-spree-app`
 
-When you scaffold via `npx create-spree-app`, the resulting Gemfile already includes:
+When you scaffold via `npx create-spree-app`, the resulting Gemfile already includes three payment providers plus i18n:
 
 | Gem | What it provides |
 |---|---|
@@ -52,22 +52,13 @@ When you scaffold via `npx create-spree-app`, the resulting Gemfile already incl
 
 These are commercially-significant integrations. If you remove one from your Gemfile, also strip its admin Settings → Payment methods entry. If you add one to an existing project that wasn't created with `create-spree-app`, follow the standard three-step install above.
 
-## Community extensions catalog
+## Integrations and community extensions
 
-The authoritative list of community extensions is at `docs/developer/customization/extensions.mdx` (also at https://spreecommerce.org/docs/developer/customization/extensions). Categories covered:
+The maintained integrations list is at `https://spreecommerce.org/docs/integrations` (source: `docs/integrations/integrations.mdx`) — it currently covers Stripe, Adyen, PayPal, RazorPay, Avalara (`spree_avatax`), Meilisearch, Google Analytics / Tag Manager, and Klaviyo.
 
-- **Internationalization** — `spree_i18n` (multi-language admin), `flowcommerce_spree` (cross-border)
-- **Order management** — `spree_print_invoice`
-- **Marketing** — `spree_mailchimp_ecommerce`
-- **Product features** — `spree_volume_pricing`, `spree_products_qa`
-- **Search** — `spree_searchkick` (Elasticsearch via Searchkick)
-- **Shipping** — `spree_easypost`, `spree_shipstation`
-- **Social** — `spree_social` (Facebook/Twitter/etc login), `spree_reviews`
-- **Tax** — `spree_avatax_official`, `spree_taxjar`
-- **Upselling** — `spree-product-assembly` (bundles), `spree_related_products`
-- **Customer service** — `spree_gladly`
+Beyond that there is a long tail of **legacy community extensions** from the Spree 4.x era — `spree_print_invoice`, `spree_volume_pricing`, `spree_products_qa`, `spree_searchkick`, `spree_easypost`, `spree_shipstation`, `spree_social`, `spree_reviews`, `spree_taxjar`, `spree-product-assembly`, `spree_related_products`, and others. These are not in the current docs and many are unmaintained — before adding one, verify against its GitHub repo that it supports your Spree 5.x version (check the gemspec's `spree_core` constraint and the CHANGELOG), and expect to fork/patch.
 
-Each extension links to its GitHub repo. Compatibility is per-extension-version — when you upgrade Spree, check each extension's CHANGELOG before bumping.
+Compatibility is per-extension-version — when you upgrade Spree, check each extension's CHANGELOG before bumping.
 
 ## `spree_dev_tools` — first install on any project
 
@@ -136,7 +127,7 @@ For the full tutorial — decorators, controller extensions, model decorators, r
 
 ## Swapping a core service is NOT an extension
 
-A common confusion: "I want my own version of an existing Spree service — should I build an extension?" Almost always no. Spree exposes 70 swappable core injection points via `Spree.dependencies` (or `Spree.<name> = ...` directly) plus 300+ API injection points (serializers, finders, per-endpoint services) via `Spree.api`. You subclass the default, register the override in `config/initializers/spree.rb`, and Spree calls your service everywhere. No gem packaging required.
+A common confusion: "I want my own version of an existing Spree service — should I build an extension?" Almost always no. Spree exposes 70+ swappable core injection points via `Spree.dependencies` (or `Spree.<name> = ...` directly) plus 300+ API injection points (serializers, finders, per-endpoint services) via `Spree.api`. You subclass the default, register the override in `config/initializers/spree.rb`, and Spree calls your service everywhere. No gem packaging required.
 
 ```ruby
 # config/initializers/spree.rb
@@ -160,13 +151,13 @@ For one app: put the code directly in `app/` (subscribers, decorators, services,
 
 - **Migrations don't auto-apply.** Each install generator copies migrations into `backend/db/migrate/`; you must run `spree migrate` after. `spree upgrade` bundle-updates every spree-prefixed gem (extensions included), but its migration-install step (`spree:install:migrations`) only covers Spree core — and `spree migrate` has the same limitation. After an extension version bump, re-run the extension's install generator (or `spree rails railties:install:migrations`) to copy any new extension migrations, then `spree migrate` to apply them.
 - **Initializers can drift across upgrades.** When you bump an extension version, the initializer it generated may need new config keys. Check the extension's CHANGELOG before upgrading.
-- **Extensions ship migrations with the engine name as a suffix** in the host app (e.g. `db/migrate/<ts>_setup_spree_stripe_models.spree_stripe.rb`; Spree core's own migrations use `.spree.rb`). The suffix records which engine a migration was copied from: the install tasks use it to skip already-copied migrations, and Spree's boot-time check uses it to warn when an engine's migrations are missing. Don't rename them.
+- **Extensions ship migrations with the engine name as a suffix** in the host app (e.g. `db/migrate/20260427130753_create_spree_paypal_checkout_orders.spree_paypal_checkout.rb`; Spree core's own migrations use `.spree.rb`). The suffix records which engine a migration was copied from: the install tasks use it to skip already-copied migrations, and Spree's boot-time check uses it to warn when an engine's migrations are missing. Don't rename them.
 - **Decorators in extensions** can collide with decorators in your app. If two reopen `Spree::Order` and define a method with the same name, last-loaded wins (load order is alphabetical by gem name). Avoid decorating the same model in two places.
 - **Engine-level subscribers** registered in an `initializer 'spree.<name>.subscribers'` block are appended once at boot. Subscriber code hot-reloads — Spree resets and re-registers all subscribers on each code reload. Only changes to the registration itself (the engine initializer) need a server restart.
 
 ## Where to read further
 
-- **Extension catalog:** https://spreecommerce.org/docs/developer/customization/extensions and `docs/developer/customization/extensions.mdx`
+- **Integrations catalog:** https://spreecommerce.org/docs/integrations (source: `docs/integrations/integrations.mdx`)
 - **Building extensions tutorial:** `docs/developer/contributing/creating-an-extension.mdx` (full walkthrough — generates a sale-price extension)
 - **Customization patterns:** `docs/developer/customization/quickstart.mdx`, `docs/developer/customization/decorators.mdx`, `docs/developer/customization/dependencies.mdx`
 - **Events for sync/notify scenarios:** the `spree-events-webhooks` skill

@@ -48,6 +48,7 @@ patterns=(
   # whether or not it's terminated; semicolon-anchoring would let unwrapped
   # SQL through.
   'DELETE[[:space:]]+FROM[[:space:]]+spree_orders([[:space:]]|$)'
+  'DELETE[[:space:]]+FROM[[:space:]]+spree_payments([[:space:]]|$)'
   'DELETE[[:space:]]+FROM[[:space:]]+spree_users([[:space:]]|$)'
 
   # ActiveRecord mass deletes via runner / console

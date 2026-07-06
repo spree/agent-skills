@@ -19,7 +19,7 @@ You need both for a multilingual store. UI strings are about how the app speaks;
 Every Spree gem ships its own English locale file. `Spree.t` looks up a key scoped under `spree.*` in the active locale:
 
 ```ruby
-Spree.t(:add_to_cart)                      # => "Add To Cart"
+Spree.t(:save)                             # => "Save"
 Spree.t('i18n.this_file_language')         # => "English (US)"
 Spree.t(:paid, scope: 'payment_states')    # => "Paid"
 Spree.t(:missing_key, default: 'Fallback') # => "Fallback"
@@ -33,7 +33,7 @@ In views / helpers, the shorthand is just `Spree.t(...)`. In ERB templates, you 
 
    ```ruby
    # Gemfile
-   gem 'spree_i18n'   # ships translations for ~50 locales
+   gem 'spree_i18n'   # ships translations for 40+ locales
    ```
 
    This adds `config/locales/<locale>.yml` files for every Spree gem in the bundle.
@@ -53,7 +53,7 @@ In views / helpers, the shorthand is just `Spree.t(...)`. In ERB templates, you 
    store.default_market.update!(supported_locales: ['es', 'fr'])
    ```
 
-   `supported_locales` accepts an Array or a comma-separated string; `default_locale` also lives on the market. When a store has markets (the norm — stores created with a `default_country_iso`, including seeds and the admin flow, get a default market automatically), `Store#supported_locales_list` and `Store#default_locale` are derived from the markets and the store-level `supported_locales`/`default_locale` columns are ignored. The store columns are legacy fallbacks used only when a store has no markets.
+   `supported_locales` accepts an Array or a comma-separated string; `default_locale` also lives on the market. When a store has markets (the norm — stores created with a `default_country_iso`, including seeds and the admin flow, get a default market automatically), market values take precedence: `Store#supported_locales_list` comes entirely from the markets, and `Store#default_locale` returns the default market's locale — falling back to the store column only when the market's `default_locale` is blank. With no markets at all, the store-level columns are used directly.
 
 4. **Customize keys** by overriding in your app's `config/locales/<locale>.yml` — Rails merges later-loaded locale files over earlier ones, and your app's `config/locales/` is loaded last by default.
 
@@ -122,8 +122,9 @@ spree_product_translations
   ├── locale       ('en', 'es', 'fr', ...)
   ├── name
   ├── description
-  ├── slug
+  ├── slug         (also uniquely indexed per (locale, slug))
   ├── meta_description
+  ├── meta_keywords
   ├── meta_title
   └── deleted_at   (paranoid; plus created_at/updated_at)
 ```
@@ -196,8 +197,8 @@ For RTL support:
    ```ruby
    I18n.available_locales = %i[en ar he]
    ```
-2. **Storefront direction:** storefronts are external (Next.js) apps, so RTL direction is the storefront's responsibility — set `dir="rtl"` in its own layout based on the active locale. Spree core ships no `i18n.dir` locale key.
-3. **Admin UI direction:** the admin doesn't implement RTL layout — the layouts set `<html lang="...">` but never `dir`, and there's no RTL stylesheet build. RTL *data* works fine — Arabic/Hebrew strings are stored and returned as-is — but flipping the admin UI to RTL (e.g. setting `dir="rtl"` on the document root per locale) is something you'd have to add yourself.
+2. **Storefront direction:** storefronts are external (Next.js) apps, so RTL direction is the storefront's responsibility — set `dir="rtl"` in its own layout based on the active locale. On the Ruby side, `Spree::Locale.new(code: locale).rtl?` / `.direction` is the source of truth (there's no `i18n.dir` locale key).
+3. **Admin UI direction:** the admin flips to RTL automatically — its layouts set `dir="<%= html_dir %>"` (via `Spree::Admin::RtlHelper#html_dir` → `Spree::Locale#direction`) and the gem ships an RTL stylesheet (`_rtl.css`). RTL triggers for locales whose language code is in `Spree::Locale::RTL_LANGUAGE_CODES` (`ar he fa ur yi`); no extra setup needed.
 4. **Mobility data** works the same — you store Arabic strings in `spree_product_translations` with `locale: 'ar'`.
 
 ## Storefront integration
@@ -205,7 +206,7 @@ For RTL support:
 The Store API responds in the locale specified by the `X-Spree-Locale` header (or per-request `?locale=es`). Pass the exact locale code the store supports (e.g. `es`, not `es-ES`); unsupported values silently fall back to the store's default locale. Translated fields are returned in that locale; if the locale isn't available, fallback applies.
 
 ```bash
-curl -H "X-Spree-API-Key: pk_…" \
+curl -H "X-Spree-Api-Key: pk_…" \
      -H "X-Spree-Locale: es" \
      https://my-spree.example.com/api/v3/store/products/cool-shirt
 # => { "name": "Camiseta", ... }
@@ -284,7 +285,7 @@ Switchers should read `store.supported_locales_list` (markets' locales + the sto
 
 ### "Translations admin is missing for new content"
 
-The Rails admin already ships a centralized Product Translations page: an overview grid with per-locale coverage stats at `/admin/product_translations`, plus bulk CSV export/import via `Spree::Exports::ProductTranslations` / `Spree::Imports::ProductTranslations`. Per-field editing for other translatable models (`Spree.translatable_resources`: OptionType, Product, Taxon, Taxonomy, Store, Policy) lives on each record's own translations page (`/admin/translations/:resource_type/:id/edit`). The plan in `docs/plans/5.4-centralized-translations-admin.md` is still marked Draft, but its core scope — the product overview grid + CSV bulk operations — has already landed; only extensions beyond products remain open.
+The Rails admin already ships a centralized Product Translations page: an overview grid with per-locale coverage stats at `/admin/product_translations`, plus bulk CSV export/import via `Spree::Exports::ProductTranslations` / `Spree::Imports::ProductTranslations`. Per-field editing for other translatable models (`Spree.translatable_resources`: OptionType, OptionValue, Product, Taxon, Taxonomy, Store, Policy) lives on each record's own translations page (`/admin/translations/:resource_type/:id/edit`). The plan in `docs/plans/5.4-centralized-translations-admin.md` is still marked Draft, but its core scope — the product overview grid + CSV bulk operations — has already landed; only extensions beyond products remain open.
 
 ## Where to read further
 

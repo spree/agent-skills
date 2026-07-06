@@ -126,10 +126,10 @@ spree generate api_resource Vendor name:string:uniq slug:string:uniq --paranoid 
 
 ## Model only — no API surface
 
-If you want a Spree model but no Store/Admin API (internal-only record, supporting model, lookup table), use the **`spree:model` generator** directly. It produces the model file + migration with all the Spree conventions baked in — no controllers, serializers, or routes. Unlike `spree:api_resource` (which strips Rails' test-framework hooks), `spree:model` keeps them — and spree-starter apps configure rspec + factory_bot as generator hooks out of the box (via `config/initializers/spree_dev_tools.rb`), so you'll also get a stub model spec and factory, as with any `rails g model`.
+If you want a Spree model but no Store/Admin API (internal-only record, supporting model, lookup table), use the **`spree:model` generator** directly. It produces the model file + migration with all the Spree conventions baked in — no controllers, serializers, or routes. Unlike `spree:api_resource` (which strips Rails' test-framework hooks), `spree:model` keeps them — and dev/starter apps typically configure rspec + factory_bot as generator hooks (e.g. via a `config/initializers/spree_dev_tools.rb` setting `g.test_framework :rspec` + `g.fixture_replacement :factory_bot`), in which case you'll also get a stub model spec and factory, as with any `rails g model`.
 
 ```bash
-spree generate spree:model Brand name:string:uniq active:boolean
+spree generate model Brand name:string:uniq active:boolean   # bare names auto-prefix to spree:
 ```
 
 The `spree:model` generator is what `spree:api_resource` inherits from; running it standalone is the right choice when:
@@ -141,7 +141,7 @@ The `spree:model` generator is what `spree:api_resource` inherits from; running 
 
 ### What it produces
 
-For `spree generate spree:model Brand name:string:uniq active:boolean`:
+For `spree generate model Brand name:string:uniq active:boolean`:
 
 ```
 backend/app/models/spree/brand.rb                   (owned-once)

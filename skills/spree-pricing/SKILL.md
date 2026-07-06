@@ -71,9 +71,9 @@ wholesale = Spree::PriceList.create!(
   name: 'Wholesale',
   match_policy: 'all',     # 'all' (all rules must match) or 'any'
   starts_at: nil,          # optional time window
-  ends_at: nil,
-  status: 'active'
+  ends_at: nil
 )
+wholesale.activate          # status is a state machine (draft → active); activate/deactivate/schedule
 
 variant.prices.create!(
   price_list: wholesale,
@@ -92,11 +92,13 @@ A PriceRule is a condition gating a PriceList. PriceRule is STI; subclasses live
 
 | Subclass | Matches when… |
 |---|---|
+| `Spree::PriceRules::ChannelRule` | The order's channel is in a specified set of channels |
 | `Spree::PriceRules::CustomerGroupRule` | The customer is in a specified CustomerGroup |
 | `Spree::PriceRules::MarketRule` | The order's market is in a specified set of markets (5.4) |
 | `Spree::PriceRules::UserRule` | A specific User is logged in |
 | `Spree::PriceRules::VolumeRule` | The line item quantity hits a threshold |
-| `Spree::PriceRules::ZoneRule` | The shipping zone matches |
+
+(`Spree::PriceRules::ZoneRule` still exists so legacy rows load, but it's deliberately excluded from the admin "Add rule" picker — zones are slated for removal in 6.0. Don't use it in new code.)
 
 Each subclass implements `applicable?(context)` where `context` is a `Spree::Pricing::Context` (store, currency, zone, market, user, quantity, date, etc.).
 
@@ -219,6 +221,6 @@ The display price uses the variant's Price for `Spree::Current.currency`. The ca
 
 ## Where to read further
 
-- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/pricing.mdx`
-- **Taxes:** `node_modules/@spree/docs/dist/developer/core-concepts/taxes.mdx`
+- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/pricing.md`
+- **Taxes:** `node_modules/@spree/docs/dist/developer/core-concepts/taxes.md`
 - **Source:** `Spree::Price`, `Spree::PriceHistory`, `Spree::PriceList`, `Spree::PriceRule` in the installed `spree_core` gem.

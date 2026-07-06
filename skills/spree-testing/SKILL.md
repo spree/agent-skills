@@ -262,7 +262,7 @@ end
 
 The Rails admin uses Turbo (Hotwire). After clicking a button that triggers a Turbo Stream / Frame update, the response is async — Capybara needs to wait for the DOM update. `wait_for_turbo` waits for Turbo's in-flight requests to settle.
 
-`wait_for_turbo` comes from `Spree::Admin::TestingSupport::CapybaraUtils` in the `spree_admin` gem — it is NOT wired up by `spree_dev_tools:install` (the generator skips the gem's `spree_admin.rb` support file). If you get `NoMethodError: undefined method 'wait_for_turbo'`, add a `spec/support/spree_admin.rb`:
+`wait_for_turbo` comes from `Spree::Admin::TestingSupport::CapybaraUtils` in the `spree_admin` gem. On a standard `spree_dev_tools` setup it's already available — `rails_helper` requires `spree_dev_tools/rspec/spec_helper`, whose own support glob loads the gem's `spree_admin.rb`, which includes the module. If your setup only globs your app's `spec/support/` and you hit `NoMethodError: undefined method 'wait_for_turbo'`, add a `spec/support/spree_admin.rb`:
 
 ```ruby
 require 'spree/admin/testing_support/capybara_utils'
@@ -368,7 +368,7 @@ The Spree test app boots the full stack. Once generated, don't regenerate unless
 
 ## What NOT to test
 
-Spree's `CLAUDE.md` is clear: **don't test framework guarantees.**
+Don't test framework guarantees. (Spree's own `CLAUDE.md` states the validations rule — "no tests for standard Rails validations, only custom ones"; the rest below is this skill's guidance in the same spirit.)
 
 - ❌ Strong params filtering (it's Rails — proven, exhaustively tested upstream)
 - ❌ Presence validations on standard attributes (write tests for validations YOU customized)

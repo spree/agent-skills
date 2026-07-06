@@ -285,20 +285,19 @@ Admins can upload images and CSVs (imports). Risks:
 
 ### Sensitive logs
 
-Filter sensitive params at the Rails level:
+Rails param filtering is already largely in place: Spree core registers `filter_parameters` for `:password`, `:number`, `:verification_value`, `:client_secret`, `:refresh_token` etc., and the spree-starter app ships partial-match filters (`:passw, :email, :secret, :token, :_key, :crypt, :salt, :cvv, :cvc, …`) — partial matching means `:secret` already catches `secret_key`/`stripe_secret_key` and `:_key` catches `api_key`/`publishable_key`.
+
+Treat this as defense-in-depth, not a solved problem: extend the list for any custom param name your app introduces that the partial matches don't cover, and verify what's actually filtered:
 
 ```ruby
 # config/initializers/filter_parameter_logging.rb
-Rails.application.config.filter_parameters += %i[
-  password password_confirmation
-  api_key secret_key publishable_key
-  card_number cvv cvc
-  authentication_token reset_password_token
-  stripe_token adyen_token
-]
+Rails.application.config.filter_parameters += %i[card_number my_custom_credential]
+
+# Verify in console:
+Rails.application.config.filter_parameters
 ```
 
-Without this, a `POST /admin/payments` with form data will write the secret_key to production.log. Real incident.
+A param name that slips through the filters gets written verbatim to production.log by any form POST that carries it.
 
 ## A short checklist for a new Spree deployment
 
