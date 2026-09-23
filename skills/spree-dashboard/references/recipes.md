@@ -43,7 +43,7 @@ export function SyncToErpItem({ resource }: { resource?: { id: string } }) {
   if (!resource?.id?.startsWith('or_')) return null
   return (
     <DropdownMenuItem
-      onSelect={(event) => { event.preventDefault(); mutation.mutate() }}  // keep menu open on failure
+      onClick={() => mutation.mutate()}  // Base UI Menu.Item: onClick (add closeOnClick={false} to keep the menu open)
       disabled={mutation.isPending}
     >
       Sync to ERP

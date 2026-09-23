@@ -76,7 +76,7 @@ Integration data that nobody edits goes in `metadata` (JSON, every major model),
 
 | | `Spree::Cart` (`cart_`) | `Spree::Order` (`or_`) |
 |---|---|---|
-| Purpose | Mutable checkout state | Immutable financial record |
+| Purpose | Mutable checkout state | Financial record — immutable once `placed` (`draft` orders from admin/B2B edit flows stay editable) |
 | Lifecycle field | none — only `completed_at` (set when completed) | `status`: `draft` → `placed` / `canceled` (plus derived `payment_status`, `fulfillment_status`) |
 | Changes via | `Spree::Carts::*` workflows (AddItem, UpsertItems, Recalculate, Complete, Merge) | `Spree::Orders::*` workflows (Cancel, admin edit twins); statuses only via `Spree::Orders::UpdateStatuses` |
 | Store API | `/api/v3/store/carts` | `/api/v3/store/orders` (read), Admin API for management |
@@ -85,7 +85,7 @@ Integration data that nobody edits goes in `metadata` (JSON, every major model),
 - Shared behavior lives in **`Spree::Purchase::*` concerns** included by both (`Addresses`, `Currency`, `Market`, `Channel`, `Company`, `Taxation`, `Totals`, `PaymentProcessing`, `StoreCredits`, `GiftCards`, `Validations`, `Lifecycle`, `DigitalItems`, `QuantityRules`, `PurchaseOrder`, `Freight`, …; `CheckoutSteps` is cart-only). Code meant for both takes "a purchase", not an order.
 - **Dual owner FKs:** `LineItem`, `Fulfillment`, `Payment`, `PaymentSession`, `TaxLine`, `Discount`, `Fee`, `StockReservation` carry both `cart_id` and `order_id` (exactly one set). Always read **`record.owner`** — never assume `.order`.
 - **LineItem** (`li_`) — variant, quantity, unit price captured into the row (plus `price_list_id`, `seller_id`); has its own tax lines, discounts, fees, fulfillment items.
-- `payment_status`: `none`, `authorized`, `partially_paid`, `paid`, `partially_refunded`, `refunded`, `overcharged`, `voided`. `fulfillment_status`: `unfulfilled`, `backorder`, `partial`, `fulfilled`, `delivered`, `canceled`. Never write these yourself.
+- `payment_status`: `none`, `authorized`, `partially_paid`, `paid`, `partially_refunded`, `refunded`, `overcharged`, `voided`. `fulfillment_status`: `unfulfilled`, `backorder`, `partial`, `fulfilled`, `delivered`, `canceled` (the validator also accepts legacy `pending`, `ready`, `shipped`, which only appear on migrated rows — tolerate them when reading, removed in 6.1). Never write these yourself.
 - Querying: `store.orders.placed_orders`, `.canceled_orders`, `.drafts`; API `q[status_eq]=placed`. Carts: `store.carts.incomplete`.
 
 ## 5. Money rows — TaxLine, Discount, Fee

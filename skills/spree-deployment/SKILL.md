@@ -65,7 +65,8 @@ Puma: `PORT` (3000), `RAILS_MAX_THREADS` (3), `WEB_CONCURRENCY` (1; `auto` = one
 ## Migrations, seeds, and upgrades
 
 - The image entrypoint (`bin/docker-entrypoint`) runs `bin/rails db:prepare` **only when the container command is the Rails server** — creates + seeds on first boot, migrates on later boots. `bin/jobs` workers don't migrate.
-- Several web replicas booting at once is fine on PostgreSQL/MySQL (Rails takes a migration advisory lock). If your platform has a release/pre-deploy phase and you want failed migrations to block the rollout, run `bin/rails db:migrate` there instead.
+- **First boot:** run it once before scaling out — a release/init job running `bin/rails db:prepare`, or a single web replica. Rails' migration advisory lock (PostgreSQL/MySQL) serializes migrations only, not database creation, schema load or seeding, so replicas racing on an empty database can collide or double-seed.
+- **Later boots:** several web replicas migrating at once is fine on PostgreSQL/MySQL (the advisory lock). If your platform has a release/pre-deploy phase and you want failed migrations to block the rollout, run `bin/rails db:migrate` there instead.
 - After upgrading Spree gems, run the data backfills once per environment: `bin/rails spree:upgrade` (idempotent; `DRY_RUN=1` to preview). The entrypoint does **not** run it — use a release command or one-off task. See the `spree-upgrade` skill.
 - No default admin exists. Seeding prints a one-time setup link; print it again with `bin/rails spree:setup:token`.
 

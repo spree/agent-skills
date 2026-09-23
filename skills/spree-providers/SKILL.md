@@ -113,7 +113,8 @@ Works for any OIDC issuer (Okta, Google Workspace, Keycloak, Auth0). Remove pass
 
 ## Gotchas
 
-- **Provider must never break checkout.** Rate, tax and fulfillment calls run inside workflows — rescue vendor errors and degrade (hide the option, fall back) rather than raise, except where the contract says to raise gateway errors.
+- **Rate and fulfillment providers must never break checkout.** Their calls run inside workflows — rescue vendor errors and degrade (hide the option, fall back) rather than raise, except where the contract says to raise gateway errors.
+- **Tax providers fail closed.** If `estimate` can't compute complete `Spree::TaxLine` rows, raise — the recalculation (or completion) aborts instead of placing an order with missing tax. Only fall back (e.g. to `Spree::TaxProvider::Internal`) if the fallback writes a full, auditable set of tax lines.
 - **Stateless providers.** They're instantiated with no arguments (delivery rate providers get the `delivery_method`); anything request-specific arrives as a parameter. Don't memoize per-store data on the class.
 - **Class names in registries survive dev reloads** — core re-resolves `delivery_rate_providers` / `fulfillment_providers` on reload; string entries (`'My::Provider'`) are the most reload-safe form where a registry accepts them.
 - **Removing a gem** leaves rows pointing at unregistered classes. Those rows survive (validation runs on change only), and a store whose payout provider disappears falls back to the built-in one — but clean up delivery methods/markets that reference it.

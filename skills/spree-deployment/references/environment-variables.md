@@ -39,7 +39,7 @@ Read by the project template (`server/config/*`) and Spree gems. Verify against 
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SMTP_HOST` | — | Enables SMTP; unset in production = no delivery. Dev uses Mailpit (`http://localhost:8025`) |
+| `SMTP_HOST` | — | Enables SMTP; unset in production = no delivery. Dev compose sets `SMTP_HOST=mailpit`, `SMTP_PORT=1025` (Mailpit's SMTP port); read captured mail in its web UI at `http://localhost:8025` |
 | `SMTP_PORT` | `587` | |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | — | SMTP auth only requested when username is set |
 | `SMTP_FROM_ADDRESS` | — | Default sender |

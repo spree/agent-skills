@@ -32,7 +32,7 @@ await client.products.get('sac-spree', {}, { locale: 'fr' })  // per-request ove
 
 Pass exactly a code the store supports (`es`, not `es-ES` unless configured). Storefront language switchers read `GET /api/v3/store/locales`.
 
-**Caching:** guest Store API responses set `Vary: Accept, x-spree-currency, x-spree-locale, x-spree-channel` — enough for a CDN. A hand-rolled cache (Next.js `fetch` cache, Redis) must include locale (and currency/channel) in its key.
+**Caching:** guest Store API responses set `Vary: Accept, x-spree-currency, x-spree-locale, x-spree-channel`; authenticated responses are `private, no-store`. The `Vary` list does **not** include `x-spree-country`, yet country selects the market (locale/currency fallback, market-scoped prices) — if your storefront sends it, add country to the CDN cache key yourself. A hand-rolled cache (Next.js `fetch` cache, Redis) must key on locale, currency, channel and country.
 
 ## Data translations — Mobility
 

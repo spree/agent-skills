@@ -140,7 +140,7 @@ end
 
 Three phases with explicit transaction boundaries:
 
-1. **Prepare** (under `cart.with_lock`): replay check → concurrent-completion guard → **in-lock recalculation** (the charged total is computed now, never trusted from earlier requests) → optional `expected_total` drift guard (`cart_changed`) → `Requirements#call(completion: true)` → **`carts.complete.validate` hooks** → stamp `completing_at` → create a `draft` order copying line items, fulfillments + selected rates, TaxLine/Discount/Fee rows, promotions, address snapshots, tax identifier and PO document; re-point payments, payment sessions, reservations and coupon codes.
+1. **Prepare**: replay check and contract-price confirmation run first, outside the lock. Then, under `cart.with_lock`: concurrent-completion guard → **in-lock recalculation** (the charged total is computed now, never trusted from earlier requests) → optional `expected_total` drift guard (`cart_changed`) → `Requirements#call(completion: true)` → **`carts.complete.validate` hooks** → stamp `completing_at` → create a `draft` order copying line items, fulfillments + selected rates, TaxLine/Discount/Fee rows, promotions, address snapshots, tax identifier and PO document; re-point payments, payment sessions, reservations and coupon codes.
 2. **Payment** (`external_step`, outside any transaction): process payments if not already covered.
 3. **Finalize**: `carts.complete.before_finalize` hooks → `Spree.order_complete_workflow` (inventory, `draft → placed`, statuses, `order.placed` event) → cart `completed_at` → coupon codes marked used → `tax_provider.commit` → `carts.complete.after_finalize` hooks.
 

@@ -58,7 +58,13 @@ module MyApp
         destination: seller.payout_account_reference(self.class),
         idempotency_key: idempotency_key(seller_payout)
       )
-      seller_payout.update!(reference: t.id)  # status stays pending until the webhook confirms
+      begin
+        seller_payout.update!(reference: t.id)  # status stays pending until the webhook confirms
+      rescue StandardError => e
+        # The provider already accepted the money — a plain error here would fail the
+        # payout and release its transfers into a second payout. Report it as ambiguous.
+        raise Spree::Core::AmbiguousGatewayError, "transfer #{t.id} created; saving reference failed: #{e.message}"
+      end
       seller_payout
     rescue Acme::TimeoutError, Acme::ServerError => e
       raise Spree::Core::AmbiguousGatewayError, e.message

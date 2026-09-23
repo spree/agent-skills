@@ -27,7 +27,7 @@ command="$(echo "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || t
 [[ -z "$command" ]] && exit 0
 
 # Patterns we consider unambiguously destructive in a Spree project context.
-# Each entry is a regex (extended). Order doesn't matter; first match blocks.
+# Each entry is an extended regex, matched case-insensitively (SQL is often lowercase). Order doesn't matter; first match blocks.
 patterns=(
   # Database-level drops and resets
   # Anchored to a command position (line start, separator, subshell open, or
@@ -64,7 +64,7 @@ patterns=(
 )
 
 for pattern in "${patterns[@]}"; do
-  if echo "$command" | grep -qE "$pattern"; then
+  if echo "$command" | grep -qiE "$pattern"; then
     cat <<EOF >&2
 🛑 Spree safety hook blocked this command:
 

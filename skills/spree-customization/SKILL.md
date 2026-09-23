@@ -14,7 +14,7 @@ Spree 6 is built to be extended without forking. The hard part is picking the pa
 | You want to… | Reach for | Skill |
 |---|---|---|
 | Change currency, markets, languages, delivery zones/methods, tax rates, payment methods, order numbering | **Store settings** — dashboard → Settings, or the Admin API. Data, no deploy | `spree-dashboard`, `spree-api-v3` |
-| Tune installation-wide limits (password length, JWT expiry, rate limits, cart expiry, webhooks on/off) | **`SPREE_*` env vars** (typed, validated at boot); `Spree.config { |c| … }` still works in `config/initializers/spree.rb` | — (docs: `customization/configuration`) |
+| Tune installation-wide limits (password length, JWT expiry, rate limits, cart expiry, webhooks on/off) | **`SPREE_*` env vars** (typed, validated at boot); `Spree.config { \|c\| … }` still works in `config/initializers/spree.rb` | — (docs: `customization/configuration`) |
 | Give a record type its own typed settings (a `Brand` "featured" flag, a calculator's rate) | **Model preference** — `preference :featured, :boolean, default: false` on a model with a `preferences` column | `spree-resource` |
 | Veto an operation (purchase limits, region policy, B2B eligibility) | **Workflow `validate` hook** — `Spree.hooks.register('carts.add_item.validate', 'MyApp::CheckLimit')`, handler calls `workflow.reject!` | `spree-workflows` |
 | Run code *inside* a core flow (after finalize, before cancel, feed pricing/provider context) | **Workflow lifecycle / context hook** — `carts.complete.after_finalize`, `orders.cancel.before_cancel`, `set_*_context` | `spree-workflows` |

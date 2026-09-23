@@ -1,6 +1,6 @@
 # Spree 6 permission catalog — secret-key scopes and role keys
 
-Source of truth: `spree/core/lib/spree/core/permissions/default_catalog.rb`. At runtime, use `GET /api/v3/admin/permissions` or `Spree::ApiKey.known_scopes` (Ruby). These return the keys grantable to store staff plus `read_all` / `write_all`, and they include any scopes registered by extensions.
+Source of truth: `spree/core/lib/spree/core/permissions/default_catalog.rb`. At runtime, `GET /api/v3/admin/permissions` returns the registered catalog entries (`Spree.permissions.entries`, including scopes registered by extensions) — without the `read_all` / `write_all` aliases. `Spree::ApiKey.known_scopes` (Ruby) returns the staff-grantable keys plus those two aliases.
 
 `write_<x>` implies `read_<x>`. The same keys serve as secret-key scopes (`Spree::ApiKey#scopes`) and staff-role permissions (`Spree::Role#permissions`).
 
@@ -29,7 +29,7 @@ Source of truth: `spree/core/lib/spree/core/permissions/default_catalog.rb`. At 
 | loyalty | `gift_cards` | `read_gift_cards`, `write_gift_cards` | GiftCard, GiftCardBatch |
 | loyalty | `store_credits` | `read_store_credits`, `write_store_credits` | StoreCredit, StoreCreditEvent |
 | marketing | `promotions` | `read_promotions`, `write_promotions` | Promotion, PromotionRule/Action/Category, CouponCode, promotion custom fields |
-| settings | `settings` | `read_settings`, `write_settings` | Store, PaymentMethod, DeliveryZone(+Member), StockLocation, DeliveryProfile, Market, TaxCategory, TaxRate, AllowedOrigin, Refund/Return/Claim/OrderCancellation reasons, Channel, OrderRoutingRule, CustomFieldDefinition, Policy |
+| settings | `settings` | `read_settings`, `write_settings` | Store, PaymentMethod, Gateway, DeliveryZone(+Member), StockLocation, DeliveryProfile, Market, TaxCategory, TaxRate, AllowedOrigin, Refund/Return/Claim/OrderCancellation reasons, Channel, OrderRoutingRule, CustomFieldDefinition, Policy |
 | settings | `delivery_methods` | `read_delivery_methods`, `write_delivery_methods` | DeliveryMethod, DeliveryMethodRule, DeliveryMethodService |
 | settings | `package_types` | `read_package_types`, `write_package_types` | PackageType |
 | settings | `webhooks` | `read_webhooks`, `write_webhooks` | WebhookEndpoint, WebhookDelivery |

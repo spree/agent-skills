@@ -106,7 +106,7 @@ end
 1. Verify against the **raw** body bytes, before JSON parsing.
 2. Compare with a constant-time function (`ActiveSupport::SecurityUtils.secure_compare`, `crypto.timingSafeEqual`).
 3. Reject timestamps older than about 5 minutes (replay).
-4. Be idempotent. Deliveries aren't automatically retried, and a manual redelivery sends the same event again.
+4. Be idempotent. HTTP errors and timeouts are recorded on the delivery without an automatic retry, but an exception escaping `Spree::Webhooks::DeliverWebhook` makes `Spree::WebhookDeliveryJob` retry (up to 5 attempts), and a manual redelivery sends the same event again.
 
 `@spree/sdk/webhooks` exports `verifyWebhookSignature(rawBody, signature, timestamp, secret, tolerance = 300)`. See `spree-events-webhooks`.
 

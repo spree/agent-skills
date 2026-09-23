@@ -28,8 +28,11 @@ class SpreeAcme::DeliveryRateProvider < Spree::DeliveryRateProvider::Base
 
   # Instance-level — initialized with the delivery method (`delivery_method`, `store`, `integration`)
   def estimates(package) # Array<Estimate>; one per carrier service; [] hides the method
-    key = [:acme_quotes, store.id, package.stock_location.id, package.order.id]
-    quotes = Spree::Current.provider_cache[key] ||= integration.client.rates(package) # one call per request
+    # Splitters can yield several packages from one location for one order — key on the
+    # contents too, or a later package reuses the first package's rates.
+    contents = package.contents.map { |i| [i.variant&.id, i.quantity, i.state] }.sort_by(&:to_s)
+    key = [:acme_quotes, store.id, package.stock_location.id, package.owner.id, contents]
+    quotes = Spree::Current.provider_cache[key] ||= integration.client.rates(package) # shared across delivery methods
     quotes.map do |q|
       Spree::DeliveryRateProvider::Estimate.new(
         cost: q.amount,              # pre-tax

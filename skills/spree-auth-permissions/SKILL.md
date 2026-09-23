@@ -272,6 +272,16 @@ class MyApp::Auth::ExternalJwtStrategy < Spree::Authentication::Strategies::Base
   rescue JWT::DecodeError, KeyError
     failure(Spree.t('api.unauthorized'))
   end
+
+  private
+
+  # Yours to implement — BaseStrategy has no JWT helper. Uses the `jwt` gem.
+  def verify_with_jwks(token)
+    jwks = JWT::JWK::Set.new(MyApp::Auth.fetch_jwks) # cache the issuer's JWKS
+    JWT.decode(token, nil, true, algorithms: ['RS256'], jwks: jwks,
+               iss: ENV['IDP_ISSUER'], verify_iss: true,
+               aud: ENV['IDP_AUDIENCE'], verify_aud: true).first
+  end
 end
 
 # config/initializers/spree.rb

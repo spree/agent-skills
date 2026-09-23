@@ -116,7 +116,7 @@ variant.price_for(currency: 'EUR', user: customer, quantity: 24)   # hash form
 Spree::Pricing::Context.from_order(variant, cart)        # uses the cart's own market/channel/customer
 ```
 
-The Store API builds this context from `X-Spree-Currency` / `X-Spree-Country`, the channel of the API key, and the authenticated customer — no manual work. There's no in-process price cache; storefront caching is HTTP `Vary` on currency/locale.
+The Store API builds this context from `X-Spree-Currency` / `X-Spree-Country`, the channel of the API key, and the authenticated customer — no manual work. There's no in-process price cache. Only guest responses are publicly cacheable (`Vary: Accept, x-spree-currency, x-spree-locale, x-spree-channel`); authenticated ones are `private, no-store`. Country isn't in `Vary` but picks the market — add it to your CDN/app cache key (see `spree-i18n`).
 
 **External pricing (ERP, contract pricing):** configure a pricing provider (`Spree::PricingProvider::Base#price_for(context)`, `handles?`, `cache_ttl`) — it runs on the catalog read path, so declare a `cache_ttl` and decline anonymous contexts in `handles?`. See `spree-providers`.
 

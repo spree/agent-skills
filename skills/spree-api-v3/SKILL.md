@@ -56,7 +56,7 @@ GET    /orders/{id}                   → order by or_ id, OR by the original ca
 
 - `status` (Admin API): `draft` | `placed` | `canceled`. Filter with `q[status_eq]=placed`.
 - `payment_status`: `none`, `authorized`, `partially_paid`, `paid`, `partially_refunded`, `refunded`, `overcharged`, `voided`.
-- `fulfillment_status`: `unfulfilled`, `partial`, `fulfilled`, `shipped`, `delivered`, `backorder`, `pending`, `ready`, `canceled`.
+- `fulfillment_status`: `unfulfilled`, `partial`, `fulfilled`, `delivered`, `backorder`, `canceled` (legacy `pending` / `ready` / `shipped` can appear on migrated orders).
 - Totals: `item_total`, `delivery_total`, `discount_total`, `tax_total` (`included_`/`additional_`), `fee_total`, `gift_card_total`, `store_credit_total`, `total`, `amount_due`, each paired with `display_*`.
 - `withdrawal_period_ends_at` / `within_withdrawal_period` (EU right of withdrawal).
 
