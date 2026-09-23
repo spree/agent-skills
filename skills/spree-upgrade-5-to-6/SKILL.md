@@ -25,12 +25,21 @@ Generic mechanics (`spree upgrade` flags, `STEP=`, production release phase) are
 - [ ] **Widen the rich-text allowlist first, if needed.** Descriptions/notes are re-sanitized to what the dashboard editor emits (paragraphs, headings, inline formatting, code, blockquote, lists, links, images). Tables, `div`/`span`, inline `style` and arbitrary classes are stripped. If you need them, set `Spree::RichTextSanitizer.allowed_tags += %w[…]` / `allowed_attributes += %w[…]` in an initializer **before** `migrate_rich_text_to_columns` runs and before anything is saved under 6.0.
 - [ ] **Recreate staff roles as data.** Permission sets are removed with no bridge. A pre-existing role row comes up with **no permissions** — staff holding it are locked out (fail closed). Seed them before deploying:
   ```ruby
-  Spree::Role.find_or_create_by!(name: 'support').update!(permissions: %w[read_orders read_customers])
+  store.roles.find_or_create_by!(name: 'support').update!(permissions: %w[read_orders read_customers])  # roles belong to a store
   ```
   Keys are `read_<resource>` / `write_<resource>` from the catalog (`Spree::ApiKey.known_scopes` lists them).
 - [ ] **Delete PermissionSets initializers.** `Spree::PermissionSets::*` raises `NameError` and `Spree.permissions.assign` raises at boot. Extensions register resources with `Spree.permissions.register_scope(:reviews, group: :catalog, resources: -> { [SpreeReviews::Review] })`.
 - [ ] **Customer migration check (Devise apps).** `spree:upgrade:migrate_users_to_customers` copies `spree_users` into `spree_customers` and maps Devise's `encrypted_password` to `password_digest`. It only works if **no Devise pepper** was configured; with Devise no longer loaded it aborts until you pass `CONFIRM_NO_PEPPER=true`. Rows with blank/duplicate emails abort it too (`SKIP_INVALID_ROWS=true` to skip). Peppered/SSO/non-bcrypt installs keep a custom `Spree.customer_class` instead.
 - [ ] **Initializer settings that moved to the store** (`track_inventory_levels`, `auto_capture`, `company`, …) are copied by `store_settings_backfill_from_config` — leave them in the initializer until that step has run, then remove them.
+- [ ] **Enable Active Record encryption.** Spree 6 encrypts webhook signing secrets, gateway customer IDs and OAuth identity tokens — only when keys are configured. Make `config/application.rb` read them (inside the `Application` class):
+  ```ruby
+  %i[primary_key deterministic_key key_derivation_salt].each do |key|
+    value = ENV["ACTIVE_RECORD_ENCRYPTION_#{key.upcase}"].presence ||
+      credentials.dig(:active_record_encryption, key).presence
+    config.active_record.encryption[key] = value if value
+  end
+  ```
+  Keys only in credentials, without this, leave webhook secrets and gateway customer IDs plaintext (their `encrypts` checks `config.active_record.encryption`). Generate a separate set per environment (`spree encryption init` for dev `.env`, `spree encryption init --print` / `bin/rails db:encryption:init` for production), set them on the host **before** deploying, back them up, never change them. Existing plaintext webhook secrets and gateway customer IDs become unreadable once encryption is on: deploy first with `config.active_record.encryption.support_unencrypted_data = true` and `extend_queries = true`, run `[Spree::WebhookEndpoint, Spree::GatewayCustomer, Spree::UserIdentity].each { |m| m.find_each(&:encrypt) }`, then remove both settings. See `spree-security`.
 - [ ] **Secret API keys minted with `settings`** lose `/admin_users`, `/invitations`, `/roles` — they now need `read_staff` / `write_staff`. Re-mint integration keys that manage staff.
 
 ## 2. Run the upgrade

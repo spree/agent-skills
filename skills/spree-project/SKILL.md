@@ -27,7 +27,7 @@ If `spree` isn't on PATH, use `npx spree …` / `pnpm exec spree …`. The CLI a
 | Generator | `spree generate api_resource Brand …` (bare names auto-prefix `spree:`) | `bin/rails g spree:api_resource Brand …` |
 | Run specs | `spree rspec spec/models/…` (RAILS_ENV=test) | `bundle exec rspec spec/models/…` |
 | Rake task | `spree rake <task>` / `spree task <name>` (auto `spree:` prefix) | `bundle exec rake <task>` |
-| Sample data | `spree sample-data` | `bin/rails spree:load_sample_data` |
+| Sample data | `spree sample-data` (default store; another store: `spree rake spree:load_sample_data STORE_CODE=eu`) | `bin/rails spree:load_sample_data` (`STORE_ID=store_…` or `STORE_CODE=…` to target a non-default store) |
 | Version upgrade | `spree upgrade` | `bundle update spree…`, migrate, `bin/rails spree:upgrade` |
 | Anything else | `spree exec <cmd>` | `<cmd>` |
 
@@ -47,7 +47,7 @@ my-store/
 │   ├── seller-dashboard/   # Marketplace seller panel (optional)
 │   └── storefront/         # Next.js storefront on @spree/sdk (optional)
 ├── docker-compose.yml      # prebuilt ghcr.io/spree/spree image + Postgres (Meilisearch optional, commented out)
-├── .env                    # SECRET_KEY_BASE, SPREE_PORT, SPREE_VERSION_TAG…
+├── .env                    # SECRET_KEY_BASE, ACTIVE_RECORD_ENCRYPTION_* keys, SPREE_PORT, SPREE_VERSION_TAG… (mode 0600)
 ├── AGENTS.md / CLAUDE.md   # generated agent instructions
 └── package.json            # pins @spree/cli
 ```
@@ -63,7 +63,7 @@ my-store/
 - **Inherit from `Spree.base_class`** (defaults to `Spree::Base`), not `ApplicationRecord`. It brings preferences, prefixed IDs, ransack allowlists, document numbers, `additional_permitted_attributes`.
 - **Users are two classes:** `Spree.customer_class` (default `Spree::Customer`, table `spree_customers`, `cust_…`) and `Spree.admin_user_class` (`Spree::AdminUser`, `adm_…`). Never hardcode either. `Spree.user_class` is a deprecated alias.
 - **Scope every query through the store**: `current_store.products`, `store.orders` — never `Spree::Order.all` in request code. In dev/test `SPREE_STORE_SCOPE_GUARD=log|raise|off` flags unscoped queries.
-- **`Spree::Current`** carries per-request `store`, `channel`, `market`, `currency`, `locale`. `Spree::Current.store` falls back to `Spree::Store.default`, which **can be nil** (no store flagged default) — set `Spree::Current.store = store` explicitly in jobs, rake tasks and specs.
+- **`Spree::Current`** carries per-request `store`, `channel`, `market`, `currency`, `locale`. `Spree::Current.store` falls back to `Spree::Store.default`, which **can be nil** (no store flagged default) — set `Spree::Current.store = store` explicitly in jobs, rake tasks and specs. Assigning it also arms the dev/test `StoreScopeGuard` for the rest of that job/script, so unscoped queries there get flagged too (wrap deliberately global lookups in `Spree::StoreScopeGuard.skip { … }`).
 - **No state machines, no enums for lifecycles.** Statuses are string `status` columns declared with `has_status` (`Spree::HasStatus`); transitions are **workflows** (`app/workflows`). Extend with `Model.add_status('on_hold', after: 'approved')` — plus your own workflow to move records into it. See `spree-workflows`.
 - **`belongs_to` is required by default** — pass `optional: true` when the FK may be nil, or saves fail with "… must exist". Always pass `class_name:` and an explicit `dependent:` on `has_many`.
 - **No DB foreign keys on business tables**; add an index instead. Uniqueness validations are store-scoped in core.
@@ -74,7 +74,7 @@ my-store/
 - **Writable API attributes:** `Spree::Product.additional_permitted_attributes += [:brand_id]` — `+=`, never `<<` (the default is frozen).
 - **Services return results, not exceptions:** `result = Spree.cart_add_item_workflow.call(...)`; check `result.success?`.
 - **Money in the API is a string** (`"135.60"`) with a `display_…` twin — render the display one.
-- **Secrets** go in Rails credentials or env vars; Spree's installation settings are all `SPREE_*` env vars (see `spree-customization`).
+- **Secrets** go in Rails credentials or env vars; Spree's installation settings are all `SPREE_*` env vars (see `spree-customization`). Active Record encryption keys (`ACTIVE_RECORD_ENCRYPTION_*`) must be set in every environment — `create-spree-app` generates a dev set; `spree encryption init` adds one to older projects (see `spree-security`).
 
 ## Where customization goes (short version)
 
@@ -111,6 +111,7 @@ spree plugin new <name>        # scaffold a dashboard plugin monorepo
 spree update                   # pull latest image, recreate containers (migrations run on boot)
 spree upgrade [--plan]         # bundle update + migrate + spree:upgrade data steps
 spree seed | sample-data | user create | api-key create|list|revoke
+spree encryption init [--print]  # add ACTIVE_RECORD_ENCRYPTION_* keys to .env (never overwrites); --print for production
 spree rails spree:setup:token  # reprint the first-run admin setup link
 spree api <verb> <path>        # call the Admin API from the terminal (see spree-cli)
 ```

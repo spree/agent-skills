@@ -48,6 +48,8 @@ All models are `Spree::*`, inherit `Spree.base_class`, carry a prefixed ID, and 
 | `Market` (`mkt_`) | *Region* a store sells into — countries + currency + locales + tax-inclusive flag + tax provider | Resolved from the customer's country; falls back to the default market |
 | `Catalog` (`cat_`) | *What an audience sees and pays* | `CatalogProduct` = assortment (empty ⇒ pricing overlay only; non-empty ⇒ restricted range), optional `PriceList`, `CatalogAssignment` to a `CustomerGroup` or `Company`, plus quantity rules and order minimums. A channel may have a `default_catalog` |
 
+**Adding a store in code** (a platform provisioning merchants): creating a `Spree::Store` row only gets its default policies and delivery profile. Seed what it needs to trade with `Spree::Seeds::StoreResources.call(store: store)` — tax categories, channels (incl. `wholesale`), roles, digital delivery, payment methods, product types, customer groups, returns setup, commission rate, seller requirements, API keys, saved reports, allowed origins; per-store and safe to re-run, never touches other stores. Then, once you know where the merchant ships from, `Spree::Stores::ProvisionDefaults.call(store:, country:, locale: nil, currency: nil)` builds the default market, warehouse, delivery zones and pickup (first-time only — on a configured store it reads as a data reset). Demo data for that store: `bin/rails spree:load_sample_data STORE_CODE=<code>` (or `STORE_ID=store_…`) or `Spree::SampleData::LoadJob.perform_later(store.id)`.
+
 ## 2. Catalog — products and what hangs off them
 
 | Model | Notes |
@@ -63,7 +65,7 @@ All models are `Spree::*`, inherit `Spree.base_class`, carry a prefixed ID, and 
 | `Media` (`media_`) | Images/videos, polymorphic `viewable`; `product.primary_media`; variants link through `VariantMedia` |
 | `CustomFieldDefinition` (`cfdef_`) / `CustomField` (`cf_`) | Merchant-defined typed attributes on products, customers, orders…; store-scoped definitions; `storefront_visible`; `record.set_custom_field('custom.material', 'Cotton')` / `get_custom_field('custom.material')` |
 
-Integration data that nobody edits goes in `metadata` (JSON, every major model), not custom fields.
+Integration data that nobody edits goes in `metadata` (JSON, every major model), not custom fields. A cart's `metadata` is copied onto the order(s) it becomes at completion — and it's customer-writable through the Store API, so don't trust keys that came from it.
 
 ## 3. Buyer — Customer, Company, CustomerGroup, Address
 

@@ -296,6 +296,7 @@ end
 - **Swapping a workflow class changes its hook key.** `MyApp::Carts::AddItem < Spree::Carts::AddItem` dispatches `my_app.carts.add_item.*` — every handler on `carts.add_item.*` (yours, extensions', core's) silently stops firing. If you must subclass, declare `workflow_key 'carts.add_item'` in it. See `spree-dependencies`.
 - Registering on `orders.complete.*` raises `UnknownHookError` at boot (eager load) — `Spree::Orders::Complete` declares no hooks. Checkout goes through `carts.complete`.
 - `carts.recalculate_totals` only has `set_tax_line_context`; promotion context is on `carts.recalculate`.
+- **Workflows run from jobs, rake tasks or the console need a store context.** Set `Spree::Current.store = cart.store` (or `order.store`) first — `Spree::Store.default` may be nil. Doing so also arms the dev/test `Spree::StoreScopeGuard` for that job, so an unscoped query inside a handler you wrote gets flagged there just as it would in an API request.
 - Validate hooks see arguments, not results: `workflow.line_item`, `workflow.order`, `workflow.fulfillment` are nil until the step that sets them has run.
 
 ## Where to read further

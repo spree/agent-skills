@@ -1,6 +1,6 @@
 ---
 name: spree-b2b
-description: Use when building B2B or wholesale commerce on Spree 6 — companies/buyer organizations (company trees, divisions, members, invitations, company address book, buying on a company's behalf), catalogs and negotiated pricing (assortments, owned price lists, percentage adjustments, catalog assignment to companies or customer groups, channel default catalogs), customer groups, gated storefronts (`storefront_access` login_required / prices_hidden), the Next.js wholesale portal, minimum order quantity / order multiples / order minimums, PO numbers, and freight shipping (cartons, pallets, unpriced freight rates). Common phrasings include "B2B", "wholesale", "trade customers", "company account", "Spree::Company", "division", "buyer organization", "negotiated prices", "customer-specific pricing", "catalog", "price list per company", "MOQ", "minimum order quantity", "order multiple", "case pack", "order minimum", "PO number", "purchase order reference", "login to see prices", "members-only store", "wholesale portal", "X-Spree-Channel", "freight", "pallet", "carton".
+description: Use when building B2B or wholesale commerce on Spree 6 — the end-to-end "build a B2B store" setup, companies/buyer organizations (company trees, divisions, members, invitations, company address book, buying on a company's behalf), catalogs and negotiated pricing (assortments, owned price lists, percentage adjustments, catalog assignment to companies or customer groups, channel default catalogs), customer groups, gated storefronts (`storefront_access` login_required / prices_hidden), the Next.js wholesale portal, minimum order quantity / order multiples / order minimums, PO numbers, and orders on account (pay by invoice, staff-keyed draft orders with negotiated prices, `payment_pending`), and freight shipping (cartons, pallets, unpriced freight rates). Common phrasings include "B2B", "wholesale", "build a B2B store", "pay by invoice", "net terms", "negotiated line price", "draft order for a company", "trade customers", "company account", "Spree::Company", "division", "buyer organization", "negotiated prices", "customer-specific pricing", "catalog", "price list per company", "MOQ", "minimum order quantity", "order multiple", "case pack", "order minimum", "PO number", "purchase order reference", "login to see prices", "members-only store", "wholesale portal", "X-Spree-Channel", "freight", "pallet", "carton".
 ---
 
 # Spree B2B / Wholesale
@@ -13,6 +13,10 @@ In Spree 6, B2B is built from **four open-source building blocks**. They're all 
 | **Catalog** (`Spree::Catalog`) | The agreement: what that audience sees, what they pay, how much they must order |
 | **Channel** gating (`storefront_access`) | Whether guests can see the catalog or prices at all |
 | **Freight** (delivery rules plus the `Freight` rate provider) | How wholesale loads ship: cartons, pallets, containers, quoted after review |
+
+The end-to-end walkthrough is the **Build a B2B Store** guide (`node_modules/@spree/docs/dist/developer/how-to/build-a-b2b-store.md`) — follow it for setup order and dashboard screens; this skill is the rules and traps behind it.
+
+**Seeded for every store:** a `wholesale` channel (`login_required`, guest checkout off), a **Wholesale** customer group (the wholesale portal's approval marker), and a publishable key bound to the wholesale channel. Sample data (`spree sample-data`) adds a demo buyer `wholesale@example.com` / `spree123`, a wholesale price list with quantity breaks, the two-level company *Acme Industrial* → *Acme EMEA*, and an **inactive** *Wholesale Assortment* catalog assigned to Acme Industrial.
 
 Spree Enterprise only: company roles and capabilities (the OSS membership `role` is a cosmetic label, and every member can do everything within their standing), order approvals (`approval_required`), spending limits, governance audit history, and a company onboarding/approval flow. Payment terms, net invoicing and quotes are on the Enterprise roadmap. Enterprise governance enforces through the same endpoints, so an OSS storefront keeps working unchanged when it's switched on.
 
@@ -45,8 +49,8 @@ A catalog (`cat_`) has an **assortment** (`CatalogProduct`), an optional **owned
 
 - **An empty assortment is a pricing overlay**: the audience sees everything, at the catalog's prices. **A non-empty assortment restricts the range**: the audience sees *only* those products. Adding the first product flips the catalog from "everything" to "only this".
 - The **price list is owned by exactly one catalog** and has no audience rules of its own. It applies *because* the catalog applies, and it's excluded from normal rule matching. Removing it (`price_list: null`) or deleting the catalog **soft-deletes** the list. Spree never releases it, because an ownerless, ruleless list would price every shopper. A deactivated catalog's list goes dormant.
-- Pricing is either explicit per-variant `prices`, or `price_adjustment_percentage` (for example `-15`) with optional `price_adjustment_tiers` quantity bands. The percentage mode only works on catalog-owned lists.
-- **Catalogs are created inactive.** Go live with `adminClient.catalogs.activate(id)` (`PATCH /admin/catalogs/:id/activate`). Activation is a workflow (`Spree::Catalogs::Activate`), not a column write.
+- Pricing is explicit per-variant `prices` and/or `price_adjustment_percentage` (for example `-15`) with optional `price_adjustment_tiers` quantity bands. The percentage mode only works on catalog-owned lists.
+- **Catalogs are created inactive.** Go live with `adminClient.catalogs.activate(id)` (`PATCH /admin/catalogs/:id/activate`). Activation is a workflow (`Spree::Catalogs::Activate`), not a column write, and it's **refused for a catalog with no assignments** (error `no_audience`) unless it's some channel's `default_catalog_id`. Deactivating keeps everything for later; deleting also deletes the owned price list.
 
 ```ts
 const catalog = await adminClient.catalogs.create({
@@ -72,10 +76,20 @@ Gated storefront access (below) is checked **before** catalog resolution.
 
 ### Quantity rules and order minimums
 
-- A **per-variant** `minimum_order_quantity` and `order_multiple` (Variant columns) are resolved per field: variant base, then catalog default, then the catalog-and-product override (`Spree::Catalogs::ResolveQuantityRules`, result `Spree::QuantityRule`). With MOQ 48 and multiple 24, quantities 48, 72 and 96 are allowed and 50 is refused.
+- A **per-variant** `minimum_order_quantity` and `order_multiple` (Variant columns) are resolved per field: variant base, then catalog default, then the catalog-and-product override (`Spree::Catalogs::ResolveQuantityRules`, result `Spree::QuantityRule`) — the most specific level that states a rule wins. Steps count from the minimum: MOQ 48 / multiple 24 allows 48, 72, 96 and refuses 50; MOQ 50 / multiple 24 allows 50, 74, 98. Unrestricted variants read `1` / `1`.
+- Per-currency order minimums: `adminClient.catalogs.orderMinimums.create(id, { currency: 'USD', amount: '600' })` (or `order_minimums` on create). Read overrides back with `catalogs.products.list(id, { expand: ['quantity_rule'] })`.
 - Set per-product overrides as a whole set with `adminClient.catalogs.quantityRules.upsert(id, { terms: { prod_x: { minimum_order_quantity: 48, order_multiple: 24 } } })`. **A term for a product outside the assortment adds it to the assortment**, which switches an overlay catalog into restricting mode.
 - Rules are enforced when items are added (`Carts::AddItem`, `UpsertItems`) and again at completion (requirement code `quantity_rule_violated`). The order minimum is an **advisory requirement** (`order_minimum_not_met`) that blocks completion. The cart exposes `order_minimum`, `order_minimum_shortfall` and `below_order_minimum`, and variants expose `minimum_order_quantity`, `order_multiple` and `purchase_unit`, so steppers can move in multiples.
 - **Staff-keyed purchases are exempt** (admin drafts, carts with `created_by`), so negotiated exceptions can be recorded. Terms are read live and never stored. Placed orders are not re-validated.
+
+### Catalog price lists: the rules
+
+- Modes combine: `price_adjustment_percentage` (off the shop price), `price_adjustment_tiers` (`[{ min_quantity, percentage }]`), explicit `prices`, and `prices` with `min_quantity` (quantity breaks).
+- **Quantity is per line** — ten of one SKU reaches a ten-unit break; five each of two SKUs doesn't.
+- **A variant with breaks is priced by its breaks alone** — the catalog percentage doesn't stack on top.
+- A break may never cost more than the quantity below it (save refused), and a variant carries at most ten breaks per currency on one list (`Spree::Price::MAXIMUM_BREAKS_PER_VARIANT`).
+- Prices are never converted between currencies — state the agreement in every currency the buyer trades in.
+- `CustomerGroupRule` / `UserRule` price rules keep working where already used but aren't offered for new lists — target audiences by assigning a catalog.
 
 ## Gated channels and the wholesale portal
 
@@ -93,8 +107,23 @@ The Next.js storefront ships an opt-in `/wholesale` portal. Set `SPREE_WHOLESALE
 ## PO numbers
 
 - `po_number` is a plain indexed column on Cart and Order (`Spree::Purchase::PurchaseOrder`, which is *not* `Spree::PurchaseOrder`, the supplier procurement model with prefix `po_`). It's copied to the order at completion.
-- Turn on `Spree::Company#po_number_required` for a company. Checkout then emits the requirement `{ step: 'address', field: 'po_number' }` until one is set: `client.carts.update(id, { po_number: 'PO-4471' })`. Staff-keyed orders are exempt.
+- Turn on `Spree::Company#po_number_required` for a company. Checkout then emits the requirement `{ step: 'address', field: 'po_number', code: 'po_number_required' }` until one is set: `client.carts.update(id, { po_number: 'PO-4471' })`. Staff-keyed orders are exempt.
 - The optional **PO document** lives at `POST/GET/DELETE /api/v3/store/carts/:id/po_document`. It accepts PDF, images or Word files up to 10 MB, checked by content, stored privately and copied to the order. Admins can read it at `GET /admin/orders/:id/po_document`.
+
+## Orders on account
+
+Two ways to take a trade order now and collect later — no payment terms engine in OSS (net 30, credit limits, deposits are Enterprise roadmap):
+
+- **Pay by invoice at checkout.** The built-in `Spree::PaymentMethod::Check` records a payment without contacting a provider; it succeeds at completion and waits as `pending` until staff capture it. Every active storefront-visible method is offered on every order, so to restrict invoice terms to company purchases subclass it:
+  ```ruby
+  # server/app/models/spree/payment_method/invoice.rb
+  class Spree::PaymentMethod::Invoice < Spree::PaymentMethod::Check
+    def available_for_order?(order) = super && order.b2b?
+  end
+  # server/config/initializers/spree.rb
+  Rails.application.config.after_initialize { Spree.payment_methods << Spree::PaymentMethod::Invoice }
+  ```
+- **Staff-keyed draft orders.** `adminClient.orders.create({ customer_id, company_id, channel_id, currency, po_number, use_customer_default_address: true, items: [{ variant_id, quantity, price: '8.75' }] })`. `company_id` (create or update) makes it a company purchase with that company's catalog prices and tax. A `price` on an item is a negotiated line (`price_source: 'manual'`, never repriced; `price: null` returns it to catalog pricing) — only before placement; afterwards change money with fees/discounts. Then `adminClient.orders.complete(id, { payment_pending: true })` places it without processing payments (number assigned, stock allocated, `order.placed` fires, `payment_status` stays `none`). When the invoice is paid: `orders.payments.create(orderId, { payment_method_id, amount })` + `orders.payments.capture(orderId, paymentId)`. The dashboard's Complete action takes payment; `payment_pending` is API-only.
 
 ## Freight
 
@@ -116,6 +145,7 @@ The Next.js storefront ships an opt-in `/wholesale` portal. Set `SPREE_WHOLESALE
 
 ## Where to read further
 
+- **`node_modules/@spree/docs/dist/developer/how-to/build-a-b2b-store.md`** — the end-to-end guide (https://spreecommerce.org/docs/developer/how-to/build-a-b2b-store)
 - `node_modules/@spree/docs/dist/developer/core-concepts/{companies,catalogs,channels,freight,fees,customers}.md`
 - `node_modules/@spree/docs/dist/developer/storefront/nextjs/wholesale.md`
 - `node_modules/@spree/docs/dist/user/how-to/selling-to-businesses.md`: end-to-end setup of one trade customer

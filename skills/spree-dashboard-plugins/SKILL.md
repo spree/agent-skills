@@ -19,7 +19,7 @@ npx @spree/cli plugin new reviews \
   --author "Ada Lovelace" --author-email ada@example.com --license MIT
 # -y / --yes     accept defaults for anything not passed (author/email from git config)
 # --no-install   skip pnpm install        --force   overwrite a non-empty directory
-# --no-dashboard skip the dashboard half  --no-engine  (no-op today — see below)
+# --no-dashboard / --no-engine  reserved for when engine scaffolding lands (--no-dashboard leaves nothing to scaffold today)
 ```
 
 Licenses: MIT (default), Apache-2.0, BSD-3-Clause. Generated layout:
@@ -43,7 +43,7 @@ reviews/
         └── locales/en.json
 ```
 
-The dashboard package is named `<scope>/<name>-dashboard`. **The CLI does not scaffold the Rails engine** — `includeEngine` is hard-wired to false in `packages/cli/src/commands/plugin.ts`, whatever flags you pass (the generated README still describes an `engine/` directory; ignore that until engine templates ship). Create the backend half separately (see below). The scaffolded dashboard package also has no `build` script, so `pnpm build` at the root is a no-op until you add one (Option A below).
+The dashboard package is named `<scope>/<name>-dashboard`. **The CLI scaffolds only the dashboard half** — the generated README says so and points at the extension guide. The example pages call `/api/v3/admin/<name>` endpoints that don't exist until you build the backend half as a separate extension gem (see below). The scaffolded package's `build` script is `tsc --noEmit`: it type-checks the TypeScript source it ships, it doesn't emit JS (see Prebuilt vs source below).
 
 ## Entry module
 
@@ -120,8 +120,8 @@ export const Route = createFileRoute('/_authenticated/$storeId/reviews/$reviewId
 ```
 
 - **peerDependencies, not dependencies,** for React, the dashboard packages, TanStack, i18next, lucide. Registries are module singletons: a second copy of `@spree/dashboard-core` means your registrations land in a registry the host never reads (plugin "does nothing"). `dependencies` is only for small utilities the host doesn't have.
-- Use ranges. Caret ranges on prereleases/`0.x` are narrow (`^0.10.0` excludes `0.11` and `1.0.0-beta`), so match the ranges to the dashboard line you support — check what `@spree/dashboard-core` version the target hosts install. The CLI template currently emits `^0.10.0` / `^0.6.0` ranges, which don't match the `1.0.0-beta` packages — fix them after scaffolding.
-- **`sideEffects`** must list the entry files — otherwise a bundler may tree-shake `import '@acme/reviews-dashboard'` away.
+- Use ranges. `spree plugin new` scaffolds caret ranges on the `@spree/admin-sdk` / `@spree/dashboard-core` / `@spree/dashboard-ui` versions released alongside your `@spree/cli` (e.g. `^1.0.0-beta.3`). Caret ranges on prereleases are narrow — `^1.0.0-beta.3` accepts later `1.0.0` betas and stable `1.x`, but not betas of other versions — so keep the peers in step with the dashboard until 1.0 ships, or widen to `>=1.0.0-0 <2.0.0-0` as above.
+- **`sideEffects`** must list the entry files — otherwise a bundler may tree-shake `import '@acme/reviews-dashboard'` away. The scaffold lists `./src/index.tsx`; add the `dist/` entries if you ship prebuilt JS.
 - **The marker** `spree.dashboard.plugin: true` is what auto-discovery and Tailwind scanning look for. Without it hosts won't activate the plugin and its classes won't compile.
 - Scaffold is `"private": true` — flip it (and drop any `publishConfig.access: restricted`) before publishing.
 
@@ -130,7 +130,7 @@ export const Route = createFileRoute('/_authenticated/$storeId/reviews/$reviewId
 | | Ship source (scaffold default) | Ship prebuilt JS |
 |---|---|---|
 | `package.json` | `"main"/"types": "./src/index.tsx"`, `"files": ["src"]` | `"main": "./dist/index.cjs"`, `"module": "./dist/index.js"`, `"types": "./dist/index.d.ts"`, `"files": ["dist", "src"]` |
-| Build | none — the host's Vite compiles TSX | `tsup src/index.tsx --format cjs,esm --dts --external react` + `"prepublishOnly": "pnpm build"` |
+| Build | `tsc --noEmit` (type-check only) — the host's Vite compiles TSX | `tsup src/index.tsx --format cjs,esm --dts --external react` + `"prepublishOnly": "pnpm build"` |
 | When | Internal packages, Vite hosts (all Spree dashboards are Vite) | Public npm releases |
 
 Either way keep `src/` in `files`: the Vite plugin resolves your package and scans its source for Tailwind classes, and file routes are compiled from `src/routes`. Use static class strings — Tailwind can't see `` `text-${tone}-500` ``.
@@ -171,7 +171,7 @@ A whitelisted or discovered plugin that can't be resolved shows a Vite error ove
 
 ## The Rails gem half
 
-Most plugins need endpoints. Build a normal Spree extension gem (see `spree-extensions`; `gem install spree_extension && spree-extension create reviews`, then remove its leftover `spree_admin`/importmap bits):
+Most plugins need endpoints. Build a normal Spree extension gem (see `spree-extensions`; `gem install spree_extension -v '>= 2.0' && spree-extension create reviews` — 1.x generates a Spree 5 scaffold). Register its scope, hooks and subscribers in the gem's `config/initializers/spree.rb`:
 
 - Model + migration (`Spree.base_class`, `has_prefix_id`, no FKs), Admin API controller under `Spree::Api::V3::Admin` with `scoped_resource :reviews`, serializer, routes via `Spree::Core::Engine.add_routes { namespace :api … namespace :v3 … namespace :admin { resources :reviews } }` — consider an extension namespace (`/api/v3/admin/acme/…`) so a future core resource can't collide.
 - Permissions so roles can be granted it and `permissions.can('read', 'Spree::Review')` resolves in the dashboard: `Spree.permissions.register_scope(:reviews, group: :catalog, resources: -> { [Spree::Review] })`, plus `spree.permissions_catalog.resources.reviews.label` in the gem's locale.
@@ -198,7 +198,7 @@ pnpm build && pnpm publish --access public        # or --tag next for pre-1.0 li
 - Missing `sideEffects` → entry tree-shaken in production builds only.
 - Registering pages with `routes:` in a packaged plugin → untyped links, and any file route at the same URL shadows it.
 - Unnamespaced keys → boot-time duplicate-key errors on stores running another plugin.
-- Expecting `spree plugin new` to generate the Rails engine — it doesn't yet.
+- Expecting `spree plugin new` to generate the Rails engine — it scaffolds only the dashboard half; the example pages 404 until your gem ships the endpoints.
 - Forgetting the dev-server restart after installing/upgrading (discovery and route composition run at startup).
 
 ## Where to read further

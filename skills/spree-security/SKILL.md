@@ -19,7 +19,11 @@ Spree inherits Rails' security model and adds an e-commerce attack surface: paym
 - Keep them in Rails encrypted credentials or env vars, never in the repo. `VITE_*` variables are compiled into the dashboard bundle, so **never put a secret in one**.
 - **Leaked secret:** rotate at the provider first, then update credentials/env and deploy, then scrub git history (`git filter-repo`). If you clean history first, the leaked key keeps working until it's rotated.
 - **`secret_key_base` must stay stable per environment.** Secret API keys are stored as HMAC-SHA256 digests keyed by it, so rotating it invalidates every `sk_` key. It's also the last fallback for JWT signing. Set a dedicated JWT secret with `SPREE_JWT_SECRET_KEY` (or credentials `jwt_secret_key`).
-- **Active Record encryption.** Configure `active_record_encryption.primary_key`, `deterministic_key` and `key_derivation_salt` (generate with `bin/rails db:encryption:init`) in production credentials. Spree only encrypts `Spree::WebhookEndpoint#secret_key` and `Spree::GatewayCustomer#profile_id` **when these keys are present**. Without them those columns are plaintext.
+- **Active Record encryption.** Spree encrypts `Spree::WebhookEndpoint#secret_key` and `Spree::GatewayCustomer#profile_id` (deterministic) and `Spree::UserIdentity#access_token` / `#refresh_token` (OAuth tokens) **only when keys are configured** — without them they're plaintext, and the starter logs a warning at boot. Set all three env vars: `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY`, `ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY`, `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT`.
+  - `create-spree-app` writes a dev set into `.env`; `spree encryption init` adds one to an older project's `.env` (never overwrites existing keys, no `--force`; then recreate containers with `spree update`, or `spree dev` when ejected — `spree restart` keeps the old env); `spree encryption init --print` or `bin/rails db:encryption:init` prints a fresh set for production. Use a separate set per environment and back it up in your secret manager.
+  - The starter's `config/application.rb` copies the env vars (falling back to the `active_record_encryption` credentials entry) **into `config.active_record.encryption`**. That matters: the webhook-secret and gateway-customer `encrypts` calls check `Rails.configuration.active_record.encryption`, so keys that live only in credentials, without that snippet, leave those two columns plaintext. Apps from an older starter need the snippet (see `spree-upgrade-5-to-6`).
+  - **Never change or lose the keys** once data is encrypted. Rails can rotate the primary key, but not the deterministic key/salt the webhook secrets and gateway customer IDs use.
+  - Turning encryption on for existing data: identity tokens stay readable (`support_unencrypted_data: true`) and encrypt on next write. Webhook secrets and gateway customer IDs don't — set `config.active_record.encryption.support_unencrypted_data = true` and `extend_queries = true`, deploy with the keys, run `[Spree::WebhookEndpoint, Spree::GatewayCustomer, Spree::UserIdentity].each { |m| m.find_each(&:encrypt) }`, then remove both settings.
 - **Payment-method and integration preferences are not encrypted.** Gateway credentials live in the serialized `preferences` column, so treat the database and its backups as holding live secrets. Enter live gateway keys through the dashboard (Settings → Payments), not in seeds.
 
 The `spree/agent-skills` plugin ships a hook that warns when an agent writes a known-shape secret (Stripe live keys, AWS keys, PATs). It's a tripwire, not a review.
@@ -59,11 +63,11 @@ The jobs UI is protected by HTTP Basic auth. In production set `MISSION_CONTROL_
 - Prefixed IDs are **not secret** (they're encodings of sequential keys). Authorize every lookup; never rely on the ID being hard to guess.
 - In custom Store controllers, read through `storefront_access_policy.scope(Model.for_store(current_store))` or through `current_user.<association>`. Never use `Model.find(params[:id])`.
 - In custom Admin controllers, use the inherited `scope` (store-scoped) and declare `scoped_resource`. Multi-store apps share one database, so `Spree::Order.find` in a controller is a cross-store leak.
-- In development and test, `Spree::StoreScopeGuard` flags unscoped lookups made while handling API requests. Take its warnings seriously.
+- In development and test, `Spree::StoreScopeGuard` flags `SELECT`s on store-owned tables (any `spree_*` table with `store_id`) that are neither store-scoped nor id-filtered. It watches every API v3 request **and any unit of work that assigns `Spree::Current.store`** — jobs, webhook controllers, console scripts, specs — until `Spree::Current` resets. Mode: `SPREE_STORE_SCOPE_GUARD` / `Spree::Config[:store_scope_guard]` = `log` (default), `raise` (Spree's own API suite), `off`; never active in production. Wrap a deliberately global lookup in `Spree::StoreScopeGuard.skip { … }`. Take its warnings seriously.
 
 ## Mass assignment
 
-API v3 controllers use flat `params.permit(...)` allowlists. There is no `Spree::PermittedAttributes` module.
+API v3 controllers build their allowlist from `resource_permitted_attributes` (custom controllers) plus each model's `additional_permitted_attributes`. There is no `Spree::PermittedAttributes` module. Don't override `permitted_params` — that drops what extensions add.
 
 ```ruby
 # Make an extension column writable on the existing endpoints (never `<<`, the array is frozen):
@@ -148,7 +152,7 @@ Run `bundle audit`, `brakeman`, and `pnpm audit` for the storefront and dashboar
 ## Deployment checklist
 
 - [ ] Secrets in credentials/env. No secrets in `VITE_*`, in the repo, or in seeds.
-- [ ] `secret_key_base` stable; `SPREE_JWT_SECRET_KEY` set; Active Record encryption keys configured.
+- [ ] `secret_key_base` stable; `SPREE_JWT_SECRET_KEY` set; the three `ACTIVE_RECORD_ENCRYPTION_*` keys set (production-only set, backed up) and read into `config.active_record.encryption`.
 - [ ] `config.force_ssl = true`; HTTPS on API, dashboard and storefront.
 - [ ] Allowed Origins lists only real dashboard/seller-panel origins. Storefront CORS lists explicit origins.
 - [ ] `MISSION_CONTROL_USER` / `MISSION_CONTROL_PASSWORD` set.

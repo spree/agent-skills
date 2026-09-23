@@ -125,5 +125,5 @@ Works for any OIDC issuer (Okta, Google Workspace, Keycloak, Auth0). Remove pass
 - Overview: `node_modules/@spree/docs/dist/developer/providers/overview.md`
 - How-tos: `node_modules/@spree/docs/dist/developer/how-to/{custom-delivery-rate-provider,custom-payment-method,custom-search-provider,custom-digital-asset-provider,custom-api-authentication,custom-order-routing,custom-stock-splitter,custom-document-numbers}.md`
 - Providers: `node_modules/@spree/docs/dist/developer/providers/{fulfillment,payouts,sso,observability,erp,pim,dam}.md`
-- Integrations catalog: https://spreecommerce.org/docs/integrations
+- Integrations catalog: https://spreecommerce.org/docs/integrations (payments: Stripe, Adyen, PayPal, Razorpay; marketplace: Stripe Connect; shipping: EasyPost; tax: Avalara; search: Meilisearch; marketing/analytics: Klaviyo, GA, GTM) — setup guides under `node_modules/@spree/docs/dist/integrations/<category>/<name>.md`
 - Related skills: `spree-extensions`, `spree-taxes`, `spree-fulfillment`, `spree-payments`, `spree-marketplace`, `spree-auth-permissions`, `spree-customization`

@@ -31,18 +31,19 @@ spree build --production --tag registry.example.com/my-store:v42
 docker build . -f server/Dockerfile -t my-store
 ```
 
-Build from the **project root** as context: the Dockerfile detects `server/` (Rails) and `apps/dashboard/` (your customized dashboard) and bakes your dashboard build into the image. Without `apps/dashboard/`, the stock dashboard is baked in. If your `server/Dockerfile` predates this layout support, update it from the spree-starter template — otherwise you ship the stock dashboard over your customized one.
+Build from the **project root** as context: the Dockerfile detects `server/` (Rails) and `apps/dashboard/` (your customized dashboard) and bakes your dashboard build into the image. Without `apps/dashboard/`, the stock dashboard is baked in. `spree build --production` recognizes the layout-aware Dockerfile by its `.spree-custom-app` marker (`.spree-custom-dashboard` in the first release); without either it falls back to building with `server/` as the context. So if your `server/Dockerfile` predates this layout support, update it from the spree-starter template — otherwise you ship the stock dashboard over your customized one.
 
 Uncustomized stores can run the official multi-arch image `ghcr.io/spree/spree:<version>` directly.
 
 ## Environment variables
 
-Strictly required: `DATABASE_URL`, `SECRET_KEY_BASE`. Practically required: `RAILS_HOST`. Full table: [references/environment-variables.md](references/environment-variables.md).
+Strictly required: `DATABASE_URL`, `SECRET_KEY_BASE`. Practically required: `RAILS_HOST` and the three Active Record encryption keys. Full table: [references/environment-variables.md](references/environment-variables.md).
 
 | Variable | Why it matters |
 |---|---|
 | `DATABASE_URL` | `postgres://…`, `mysql2://…`, or `sqlite3:db/production.sqlite3` |
-| `SECRET_KEY_BASE` | `openssl rand -hex 64`. Keep stable — sessions, cookies, and derived AR-encryption keys depend on it |
+| `SECRET_KEY_BASE` | `openssl rand -hex 64`. Keep stable — sessions, cookies, JWT fallback and secret-API-key digests depend on it |
+| `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY`, `ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY`, `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT` | Encrypt webhook signing secrets, gateway customer IDs and OAuth identity tokens at rest. Unset → plaintext + a boot warning. Generate with `spree encryption init --print` or `bin/rails db:encryption:init`; a separate set per environment, backed up; **never change them once data is encrypted**. Workers need the same values as web. See `spree-security` |
 | `RAILS_HOST` | Public host (no protocol) for email links, webhook payloads, and attachment URLs in API responses. Unset → URLs point at `localhost`. On Render, falls back to `RENDER_EXTERNAL_HOSTNAME` |
 | `CDN_HOST` | Optional separate host for assets and images (sets `config.asset_host` and `Spree.cdn_host`) |
 | `SOLID_QUEUE_IN_PUMA` | `true` (default) runs jobs in the web process; `false` when a `bin/jobs` worker runs |
@@ -77,12 +78,15 @@ Puma: `PORT` (3000), `RAILS_MAX_THREADS` (3), `WEB_CONCURRENCY` (1; `auto` = one
 - Spree jobs pick their queue from `Spree.queues.<name>` (every entry defaults to `:default`); the template's `config/initializers/spree.rb` maps them to `spree_*` names. See `spree-performance` for tuning.
 - `config/recurring.yml` is Solid Queue's cron. The template schedules (production only):
   - `Spree::StockReservations::ExpireJob` — every minute (releases expired checkout holds)
-  - Omnibus price-history pruning — daily
+  - `Spree::Orders::FinalizeStaleDraftsJob` — every 5 minutes (finishes orders whose payment succeeded but whose completion never committed; never refunds)
+  - `Spree::Carts::ReapExpiredJob` — hourly (deletes abandoned carts past expiry; carts with a live payment are kept)
+  - `Spree::Collections::RegenerateTimeBasedJob` — hourly (automatic collections with time-based rules)
+  - `spree:price_history:prune` rake task (via a `command:` entry) — daily (EU Omnibus retention, per store)
   - `Spree::SellerPayouts::SweepDueJob` — daily (marketplace payouts; run it daily regardless of seller payout intervals — due-ness is decided per seller)
-  - `Spree::SellerTransfers::ExecutePendingDueJob` — hourly (marketplace transfers)
+  - `Spree::SellerTransfers::ExecutePendingDueJob` — hourly (retries refused seller transfers)
   - Solid Queue finished-job and Solid Cable message cleanup — hourly
 
-  If your project was generated before the marketplace entries existed, add the two seller jobs yourself.
+  The marketplace jobs are no-ops on a store without sellers — keep them. If your project predates any entry, copy it from the spree-starter `config/recurring.yml`.
 - Split mode: add a service running `bin/jobs` with the same env (`DATABASE_URL`, `SECRET_KEY_BASE`, `RAILS_HOST`), raise `JOB_THREADS` there, scale with `JOB_CONCURRENCY` or more replicas, and set `SOLID_QUEUE_IN_PUMA=false` on web. On a split deployment set `SPREE_IMPORT_JOB_CONCURRENCY` explicitly on **web** — the cap is computed by the process that enqueues the import.
 
 ### Mission Control (`/jobs`)
@@ -101,7 +105,7 @@ config.active_job.queue_adapter = :sidekiq
 ```
 
 - `config/sidekiq.yml` must list **every** queue you assigned via `Spree.queues` plus `default`, `mailers`, and the `active_storage_*` queues — Sidekiq has no `"*"` catch-all, so an unlisted queue never runs.
-- Move `recurring.yml` schedules to `config/schedule.yml` (sidekiq-cron).
+- Move `recurring.yml` schedules to `config/schedule.yml` (sidekiq-cron). sidekiq-cron schedules jobs, not commands, so wrap the `spree:price_history:prune` task in a small job (`Rails.application.load_tasks` unless defined, then `Rake::Task[...].tap(&:reenable).invoke`).
 - Mount `Sidekiq::Web` behind auth instead of Mission Control; run `bundle exec sidekiq` as its own service with `RAILS_MAX_THREADS >= SIDEKIQ_CONCURRENCY`; drop `SOLID_QUEUE_IN_PUMA`.
 
 ## Cache
@@ -141,7 +145,7 @@ Env: `MEILISEARCH_URL` (default `http://localhost:7700`), `MEILISEARCH_API_KEY`.
 
 ## Platform notes
 
-- **Render:** the project-root `render.yaml` Blueprint builds `server/Dockerfile` with the repo root as context — one web service + Postgres; `MISSION_CONTROL_USER=jobs` with a generated password. A commented worker block enables split mode. Filesystem is ephemeral — configure S3/R2.
+- **Render:** `create-spree-app` moves the starter's Blueprint to the project root as `render.yaml` and points every service's `dockerfilePath` (including the commented worker) at `./server/Dockerfile`, with the repo root as `dockerContext` — one web service + Postgres. The Blueprint generates `SECRET_KEY_BASE`, the three `ACTIVE_RECORD_ENCRYPTION_*` keys (copy them from the Environment tab into your secret manager) and `MISSION_CONTROL_PASSWORD` (user `jobs`). Uncomment the worker block for split mode. Filesystem is ephemeral — configure S3/R2.
 - **AWS:** single EC2 + RDS, or ECS Fargate (web and `bin/jobs` as separate services from one image).
 - **Kubernetes:** one Deployment for web, optionally one for `bin/jobs`; Secrets for `SECRET_KEY_BASE`/`DATABASE_URL`/storage creds; liveness on `/up`; migrations either via the entrypoint (server command) or a Job/init container running `db:migrate`.
 - **VPS:** `docker compose` with `web` + `postgres` is a complete deployment; add Caddy/nginx/Traefik for TLS.
@@ -162,6 +166,8 @@ Env: `MEILISEARCH_URL` (default `http://localhost:7700`), `MEILISEARCH_API_KEY`.
 | Search returns nothing on Meilisearch | Index never built — run `spree:search:reindex` |
 | Checkout stock held forever / sellers never paid | `recurring.yml` entries missing or not in the `production:` key, or you moved to Sidekiq without porting them |
 | Store data looks half-migrated after a gem bump | `spree:upgrade` not run |
+| Boot log: `[Spree] Active Record encryption is not fully configured` | `ACTIVE_RECORD_ENCRYPTION_*` unset (or not read into `config.active_record.encryption`) — secrets are being stored in plaintext |
+| Webhook secrets / gateway customers unreadable after a deploy | Encryption keys changed or missing on this environment, or encryption enabled without first encrypting existing rows (see `spree-security`) |
 
 ## Where to read further
 

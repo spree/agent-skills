@@ -69,8 +69,9 @@ spree rspec [path[:line]]   # run specs in RAILS_ENV=test
 spree rake <task> | task <name>   # `task` auto-prefixes `spree:`
 spree rails <args> | bundle <args> | exec <command>
 spree seed | sample-data | user create | api-key create|list|revoke
+spree encryption init [--print]   # add ACTIVE_RECORD_ENCRYPTION_* keys to .env (never overwrites)
 spree add dashboard         # add apps/dashboard (also: spree add seller-dashboard)
-spree plugin new <name>     # scaffold a dashboard plugin
+spree plugin new <name>     # scaffold a dashboard plugin (the gem half is a spree_extension >= 2.0 gem)
 spree eject | build [--production] | update
 spree upgrade [--plan]      # bundle update + migrate + spree:upgrade data steps
 spree db:reset              # destructive — confirm with the user first
@@ -98,7 +99,7 @@ bundle exec rake test_app               # regenerate the dummy app (after schema
 ## Security non-negotiables
 
 - Secrets live in Rails encrypted credentials or env vars — never in the repo, and never in `VITE_*` dashboard variables.
-- Configure Active Record encryption keys in production (`bin/rails db:encryption:init`). Spree encrypts secrets such as webhook signing keys and gateway customer IDs; they only encrypt at rest when AR encryption is configured.
+- Set the three Active Record encryption keys (`ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY`, `_DETERMINISTIC_KEY`, `_KEY_DERIVATION_SALT`) in every environment. Spree encrypts webhook signing secrets, gateway customer IDs and OAuth identity tokens only when they're configured — otherwise plaintext. New projects get a dev set in `.env`; `spree encryption init` adds one to older projects, `spree encryption init --print` (or `bin/rails db:encryption:init`) prints a production set. Never change them once data is encrypted.
 - Webhook receivers MUST verify the HMAC-SHA256 signature with a timing-safe compare and a replay window.
 - Publishable keys (`pk_*`) are safe in client code. Secret keys (`sk_*`) are server-to-server only — never in mobile apps or browser JS. Grant them minimum scopes.
 - Hiding UI in the dashboard is not authorization; the API enforces permissions.

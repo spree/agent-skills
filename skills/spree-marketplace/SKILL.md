@@ -101,6 +101,7 @@ When a cart spans N sellers, completion creates an `OrderGroup` with one `Order`
 - **`POST /api/v3/store/carts/:id/complete` can return an `OrderGroup` (`ogrp_…`, with `orders[]`) instead of an `Order`.** `@spree/sdk` types `carts.complete` as `Promise<Order | OrderGroup>`; narrow with its `isOrderGroup(result)` guard (keys on `orders[]`). The confirmation page and order history should show the group as one purchase.
 - **`PATCH /api/v3/admin/orders/:id/complete` can return a group too.** In `@spree/admin-sdk`, use `isOrderGroup(result)`: `const orders = isOrderGroup(r) ? r.orders : [r]`.
 - Group totals are **summed from the children**, not divided. Delivery and order-level fees are **apportioned by item value**.
+- Checkout data is copied, not shared: every child order (and the group) carries the checkout-level fields — customer, email, company, market, channel, `customer_note`, `po_number` — and its own deep copy of the cart's `metadata` (customer-writable — never trust it for approval/fraud flags). Editing one sibling's metadata never reaches the others.
 - If you finalize orders from custom code, go through `Spree.order_complete_workflow` or `Spree.carts_complete_workflow`, never a status write. Seller attribution, commission and the group all depend on it.
 - Admin reads only: `adminClient.orderGroups.list()` / `get('ogrp_…', { expand: ['orders'] })`.
 
@@ -156,7 +157,7 @@ When a provider `requires_payout_account?`, add the `payout_account` requirement
 
 `/api/v3/seller/*` is a separate surface for a signed-in seller's team. `@spree/seller-sdk` wraps it. The key facts:
 
-- Auth is a **JWT only**, with audience `seller_api` (admin and store tokens get 401). There's **deliberately no secret key**. Every call needs `X-Spree-Seller-Id` (except `GET /seller/me`). The refresh token is an HttpOnly cookie scoped to `/api/v3/seller/auth`. Store staff who run no seller get 401 at login.
+- Auth is a **JWT only**, with audience `seller_api` (admin and store tokens get 401). There's **deliberately no secret key**. Every call needs `X-Spree-Seller-Id` (except `GET`/`PATCH /seller/me`, the signed-in person's own account). The refresh token is an HttpOnly cookie scoped to `/api/v3/seller/auth`. Store staff who run no seller get 401 at login.
 - **403** means no or unknown seller header, or a missing permission key. **404** means not found *for this seller*, and it's also what another seller's record returns, so records can't be enumerated. No endpoint takes a seller ID in its path.
 - Sellers **submit** products and can't set `active`. Sellers **can't mark orders delivered**. Ledger endpoints (`balances`, `transfers`, `payouts`) are read-only.
 - Seller staff permissions come from roles the seller owns, with the same flat permission keys as the back office but a narrower set (see `spree-auth-permissions`).
@@ -175,7 +176,8 @@ The full namespace table, operator Admin endpoints and routes are in **[referenc
 **Seller panel.** `@spree/seller-dashboard` is a React SPA sharing `@spree/dashboard-core` and `-ui` with the admin dashboard. `create-spree-app` scaffolds it automatically. In an existing project, run `spree add seller-dashboard`, which creates `apps/seller-dashboard/`. It runs on dev port **5174** (the admin dashboard uses 5173), and production serves it at `/sellers`. Things to know:
 - Only set `VITE_API_PROXY_TARGET` in `.env.local`. **Don't set `VITE_SPREE_API_URL` in dev**, because it bypasses the proxy and breaks the `SameSite=Lax` refresh cookie.
 - Customize in `src/plugins.ts` with `defineDashboardPlugin` imported from `@spree/seller-dashboard` (see `spree-dashboard-plugins`). **Only two slots exist**, `seller.team.actions` and `seller.team.after`. For anything else, add a route. The `seller.form_*` slots belong to the *admin* dashboard.
-- It ships **English only**. Add other locales with `i18n.addResourceBundle`. There's no branding config: restyle through Tailwind and override translation keys for copy.
+- It ships **English, Arabic, German, French, Polish and Simplified Chinese** (`src/locales/{en,ar,de,fr,pl,zh-CN}.json`). Each seller user picks a language in the account dialog; it's saved as `selected_locale` on their account (`PATCH /seller/me`) and adopted at sign-in on any browser. Switching reloads the page. To add a language, drop another `src/locales/<code>.json` into the panel — it's discovered from the bundle files, not the API. There's no branding config: restyle through Tailwind and override translation keys for copy.
+- The account dialog edits the signed-in person (name, photo, language) via `PATCH /seller/me`; the seller business (public profile) is `PATCH /seller/profile`. Keep that split in custom UIs.
 
 For sample data in development, run `spree rake spree:sellers:sample_data` (native: `bin/rails spree:sellers:sample_data`). It signs in as `seller@example.com` / `spree123` and refuses to run outside development and test.
 

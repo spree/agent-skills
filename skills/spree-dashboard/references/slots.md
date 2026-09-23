@@ -55,6 +55,14 @@ Both slots render on every page that uses `<PageHeader>`, so check the resource 
 | `seller.team.actions` | Team screen header actions | `{ sellerId }` |
 | `seller.team.after` | Below the team member list | `{ sellerId }` |
 
+## Sign-in: no store access
+
+| Slot | Where | Context |
+|---|---|---|
+| `no_store_access` (`NO_STORE_ACCESS_SLOT`) | Full-screen message for a signed-in admin who holds a role on no store (not yet invited, or removed from all). Registering any entry **replaces** the built-in message | `{ user, signOut }` (`NoStoreAccessSlotContext`) |
+
+Use it to show a different call to action ("Request access", a link to your onboarding) or redirect from an effect. `GET /api/v3/admin/me` answers for such users when no `X-Spree-Store-Id` is sent.
+
 ## Dynamic, per-type editor slots
 
 The slot name is computed from the type's wire shorthand (what `Spree::Base.api_type` returns / what the API reports as `type`). Registering against the right name replaces or augments the generated editor. These are how a backend gem that adds a payment method, promotion rule/action, price rule or setup task ships its dashboard UI.

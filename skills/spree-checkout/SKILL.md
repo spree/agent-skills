@@ -125,7 +125,7 @@ Removing a step only removes the **label**. Requirements filed under it still ga
 
 ### Storing the data a requirement checks
 
-`Spree::Cart` has a `metadata` JSON column the Store API accepts on `PATCH /api/v3/store/carts/:id` (merged, not replaced). Carts do **not** include `Spree::HasCustomFields`. Cart-level `metadata` is **not copied** onto the order at completion (line-item metadata is) — read it via `order.cart.metadata`, or copy what you need in a `carts.complete.before_finalize` handler.
+`Spree::Cart` has a `metadata` JSON column the Store API accepts on `PATCH /api/v3/store/carts/:id` (merged, not replaced). Carts do **not** include `Spree::HasCustomFields`. At completion the cart's `metadata` is **deep-copied onto the order** (and, for a checkout split between sellers, onto every child order and the `OrderGroup`), so `order.metadata['vat_number']` is still there after placement. After that the two are independent — editing one never changes the other. **Treat those keys as customer input:** shoppers write cart metadata through the Store API, so never keep anything your code later trusts there (fraud/approval flags, prices, entitlements) — use a staff-only field, custom field or your own column for that.
 
 ## Completion: `Spree::Carts::Complete`
 

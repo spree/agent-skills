@@ -89,6 +89,8 @@ Your own resources: `spree generate api_resource Brand …` writes `spec/factori
 - **Set `Spree::Current.store`** in specs that run code outside a request (workflows, jobs, services) when the store isn't the default one. `Spree::Current.store` falls back to `Spree::Store.default`, which is `nil` if no default store exists — store-scoped records then fail with **"Store must exist"**. Groups tagged `without_global_store: true` skip the default store entirely.
 - **`belongs_to` is required** on Spree models. A factory for your model must build every non-optional association; failures read "`<Assoc> must exist`" (not "can't be blank"). If blank is legitimate, declare `optional: true` on the association.
 - `Spree::Current` is an `ActiveSupport::CurrentAttributes`; rspec-rails resets it between examples, so set it inside the example (or a `before`).
+- **Assigning `Spree::Current.store` arms `Spree::StoreScopeGuard`** for the rest of the example: any `SELECT` on a store-owned table that's neither store-scoped nor id-filtered is logged (default `log` mode), or raises `Spree::StoreScopeGuard::UnscopedQueryError` with `SPREE_STORE_SCOPE_GUARD=raise` (what Spree's own API suite uses — worth turning on in CI). API v3 request/controller specs are always guarded. Fix the query (`store.products…`), or wrap a deliberately global lookup in `Spree::StoreScopeGuard.skip { … }`.
+- The extension dummy app (`rake test_app`) configures Active Record encryption keys, so encrypted columns (webhook secrets, identity tokens) behave as in production. A host app's test env needs its own keys for the same behavior.
 
 ## Model specs
 

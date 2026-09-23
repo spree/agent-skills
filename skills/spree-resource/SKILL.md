@@ -1,6 +1,6 @@
 ---
 name: spree-resource
-description: Use when the user wants to add a new model, database table, or REST API endpoint to a Spree 6 project. Covers `spree:api_resource` (model + migration + Store/Admin API controllers + serializers + factory + controller specs + routes) and `spree:model` (model + migration only). Common phrasings include "add a Brand model", "create a new resource", "expose X as an API endpoint", "add an Admin API for Y", "scaffold a Spree resource", "create a Spree model without an API", "internal model", "make my model store-scoped".
+description: Use when the user wants to add a new model, database table, or REST API endpoint to a Spree 6 project. Covers `spree:api_resource` (model + migration + Store/Admin API controllers + serializers + factory + controller specs + routes + permission scope) and `spree:model` (model + migration only). Common phrasings include "add a Brand model", "create a new resource", "expose X as an API endpoint", "add an Admin API for Y", "scaffold a Spree resource", "create a Spree model without an API", "internal model", "make my model store-scoped".
 ---
 
 # Adding a Spree Resource
@@ -13,6 +13,7 @@ To add a model exposed through the v3 API, use the `spree:api_resource` generato
 - Store + Admin API controllers and serializers
 - A FactoryBot factory and controller specs for both APIs
 - Route lines inside the `Spree::Core::Engine.add_routes` block of your app's `config/routes.rb`
+- The `read_<plural>` / `write_<plural>` permission scope (`Spree.permissions.register_scope` appended to `config/initializers/spree.rb`) and its role-editor label (`config/locales/spree_<plural>.en.yml`) — Admin surface only
 
 Prerequisite: run `spree eject` first. Generators execute inside the web container, and only the ejected dev compose bind-mounts `./server`, so generated files appear (and persist) on your host.
 
@@ -60,6 +61,7 @@ Field syntax follows Rails' attribute parser, with Spree conventions applied:
 | `--paranoid` | off | `acts_as_paranoid` + `deleted_at` column/index; Admin serializer exposes `deleted_at`. |
 | `--id-prefix=br` | snake-cased class name | Prefixed-ID prefix (`brand_…` by default). Core uses short prefixes: `prod_`, `variant_`, `cart_`, `or_`, `py_`, `ful_`, `cust_`, `sl_`. |
 | `--parent=Spree::Foo` | `Spree.base_class` | Parent class expression. |
+| `--permission-group=settings` | `catalog` | Where the `read_`/`write_` keys appear in the role editor and API-key scope picker (`orders`, `catalog`, `customers`, `settings`, … or your own lowercase identifier). |
 | `--skip-routes` | off | Don't touch routes. |
 | `--skip-specs` | off | Don't generate controller specs. |
 
@@ -75,6 +77,8 @@ server/app/serializers/spree/api/v3/admin/brand_serializer.rb       (managed)
 server/spec/factories/spree/brand_factory.rb                        (managed)
 server/spec/controllers/spree/api/v3/{store,admin}/brands_controller_spec.rb (managed)
 server/config/routes.rb                                             (idempotent inject)
+server/config/initializers/spree.rb                                 (idempotent append — register_scope)
+server/config/locales/spree_brands.en.yml                           (owned-once — permission label)
 ```
 
 Generated model (store-scoped default):
@@ -121,31 +125,31 @@ end
 - **Model (owned-once)** — written once; re-runs never touch it. Your validations, scopes, associations live here.
 - **Migration (append-only)** — generated once. Change schema with a new migration: `spree generate migration AddLogoToSpreeBrands logo_url:string`.
 - **Controllers, serializers, factory, specs (managed)** — overwritten on re-run. If you hand-edit them, don't re-run the generator for that resource (or re-apply your edits).
-- **Routes (idempotent)** — a line already present isn't duplicated.
+- **Routes and permission scope (idempotent)** — a route line or `register_scope(:brands, …)` already present isn't duplicated. The permission locale file is owned-once, so an edited label survives re-runs.
 
 ## After running the generator
 
 1. **Review the model** — add validations, associations, scopes. Generated `belongs_to` is required (Spree models require `belongs_to` by default; failure message is "must exist"). Add `optional: true` and relax the migration's `null: false` for optional references.
 2. **Migrate** — `spree migrate`.
-3. **Register a permission scope** — the Admin controller declares `scoped_resource :brands`, so requests need `read_brands` / `write_brands`. Until you register the scope, only full-access principals get in (the `admin` role, `write_all`/`read_all` secret keys) and you can't grant it to custom roles or mint a scoped key. Register it once in `config/initializers/spree.rb` (or your engine's initializer):
+3. **Grant the permission** — the Admin controller declares `scoped_resource :brands`, and the generator registered the matching scope in `config/initializers/spree.rb`:
 
    ```ruby
-   Rails.application.config.to_prepare do
-     Spree.permissions.register_scope(:brands, group: :catalog, resources: -> { [Spree::Brand] })
-   end
+   # Permissions for the Brand API — grants read_brands / write_brands
+   # to staff roles and secret API keys. Labels: config/locales/spree_brands.en.yml
+   Spree.permissions.register_scope(:brands, group: :catalog, resources: -> { [Spree::Brand] })
    ```
 
-   Labels go in your locale file under `spree.permissions_catalog.resources.brands` (`label`, `description`). See `spree-auth-permissions`.
-4. **Store-scoping on reads** — the base controller scopes collections with `Model.for_store(current_store)`. `SingleStoreResource` provides that scope; for `--no-store-scoped` models `for_store` falls back to `current_store.<plural>` if the association exists, else the whole table. Add `has_many :brands, class_name: 'Spree::Brand', dependent: :destroy` to `Spree::Store` via a decorator if you want `current_store.brands`.
-5. **Permitted attributes** — the generated controllers override `permitted_params` with an explicit list. Prefer switching to `resource_permitted_attributes` so extension-declared attributes (`Spree::Brand.additional_permitted_attributes += [...]`) and param normalization still apply:
+   Until you grant `read_brands` / `write_brands` to a staff role (dashboard **Settings → Roles**, the Admin API, or seeds) or mint them on a secret key, only full-access principals get in (the `admin` role, `read_all`/`write_all` keys). The label lives under `spree.permissions_catalog.resources.brands` (`label`, optional `description`). With `--no-admin` nothing is registered. See `spree-auth-permissions`.
+4. **Store-scoping on reads** — the base controller scopes collections with `Model.for_store(current_store)`. `SingleStoreResource` provides that scope; for `--no-store-scoped` models `for_store` falls back to `current_store.<plural>` if the association exists, else the whole table. Add `has_many :brands, class_name: 'Spree::Brand', dependent: :destroy` to `Spree::Store` via a decorator if you want `current_store.brands`. A permission decides *whether* someone may read brands, not *which* ones — keep lookups store-scoped.
+5. **Permitted attributes** — the generated controllers declare the writable columns in `resource_permitted_attributes` (not a `permitted_params` override), so extension-declared attributes (`Spree::Brand.additional_permitted_attributes += [...]`) and param normalization still apply:
 
    ```ruby
    def resource_permitted_attributes
-     %i[name slug active]
+     [:name, :slug, :active]
    end
    ```
 
-   (Remove the generated `permitted_params` if you do this. Remember the controllers are managed — a re-run restores the template.)
+   Edit the list to drop columns clients shouldn't write — but the controllers are managed, so a re-run restores the template.
 6. **Run the specs** — `spree rspec spec/controllers/spree/api/v3/`. The specs use the `'API v3 Store guest'` / `'API v3 Admin authenticated'` shared contexts from `spree_api`'s testing support (see `spree-testing`).
 
 ## Adding a status

@@ -20,6 +20,20 @@ Packages are `1.0.0-beta.x` (Developer Preview) — names can still move between
 | Providers | `AuthProvider`, `PermissionProvider`, `StoreProvider` (the shell mounts these; only needed for a custom shell) |
 | Export | `ExportButton` |
 | Vite | `spreeDashboardPlugin` from `@spree/dashboard-core/vite` (core-only hosts; full-shell hosts use `@spree/dashboard/vite`) |
+| Built-in slot names | `NO_STORE_ACCESS_SLOT` (`'no_store_access'`), `type NoStoreAccessSlotContext` (`{ user, signOut }`) |
+
+### Lightweight subpath entries
+
+The package entry loads the whole framework (every registry, component and translation). A small host app that builds its own screens and needs only the client and sign-in imports subpaths instead, keeping the rest out of its bundle:
+
+```ts
+import { adminClient } from '@spree/dashboard-core/client'               // the SDK instance alone
+import { setApiClient } from '@spree/dashboard-core/api-client'          // registers the client the providers use
+import { AuthProvider } from '@spree/dashboard-core/providers/auth-provider'
+import { useAuth } from '@spree/dashboard-core/hooks/use-auth'
+```
+
+Other exported subpaths: `@spree/dashboard-core/plugin`, `/vite`, `/vite/discover`, `/providers/*`, `/hooks/*`, `/lib/*`, `/locales/en.json`. Distributed plugins keep importing from the package root — subpaths are for trimming a custom app's bundle.
 
 ## `@spree/dashboard-ui` — design system (props in, no providers/hooks)
 
@@ -37,6 +51,11 @@ A few names exist in both packages (`ResourceCombobox`, `ResourceMultiAutocomple
 - `@spree/dashboard/vite` → `spreeDashboardPlugin()` (Tailwind, plugin discovery, `virtual:spree-dashboard-plugins`, route-tree composition).
 - `@spree/dashboard/styles.css` — CSS entry, imported first in `src/styles.css`.
 - `@spree/dashboard/components/spree/payment-method-editors/types` — `paymentMethodGuideSlot` / `paymentMethodFormSlot` / `paymentMethodActionsSlot`.
+- Sign-in / onboarding building blocks, for a host that builds its own auth screens instead of mounting `<Dashboard />` (their translations ship in `@spree/dashboard-core`, so they render translated once its i18n loads):
+  - `@spree/dashboard/components/spree/auth-shell` → `AuthShell` (two-column sign-in layout)
+  - `@spree/dashboard/components/spree/store-setup-fields` → `StoreSetupFields` (store name, country, language, currency)
+  - `@spree/dashboard/hooks/use-auth-providers` → `useAuthProviders`, `authCallbackErrorKey` (password + SSO options, SSO callback error copy)
+  - `@spree/dashboard/schemas/auth` → `loginFormSchema`, `resetPasswordFormSchema` (Zod)
 
 ## `@spree/admin-sdk`
 

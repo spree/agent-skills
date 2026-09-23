@@ -241,6 +241,6 @@ Factories (spree_dev_tools / `spree/testing_support`): `:fulfillment`, `:fulfill
 
 - `node_modules/@spree/docs/dist/developer/core-concepts/fulfillments.md`, `delivery-setup.md`, `freight.md`, `calculators.md`
 - `node_modules/@spree/docs/dist/developer/how-to/custom-delivery-rate-provider.md`, `custom-order-routing.md`, `custom-stock-splitter.md`, `sell-digital-products.md`, `custom-digital-asset-provider.md`
-- `node_modules/@spree/docs/dist/developer/providers/fulfillment.md`
+- `node_modules/@spree/docs/dist/developer/providers/fulfillment.md`; EasyPost setup: `node_modules/@spree/docs/dist/integrations/shipping/easypost.md`
 - Deeper contracts: [`references/provider-contracts.md`](references/provider-contracts.md)
 - Related skills: spree-inventory (stock levels, reservations, movements), spree-returns, spree-workflows (hooks, custom workflows), spree-providers, spree-checkout, spree-order-totals.

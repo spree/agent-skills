@@ -2,7 +2,7 @@
 
 ## Seller API: `/api/v3/seller/*` (`@spree/seller-sdk`)
 
-Every authenticated call sends `Authorization: Bearer <seller JWT>` and `X-Spree-Seller-Id: sel_…`. The one exception is `GET /seller/me`, which tells the panel which sellers the user can act for. The store is derived from the seller on the server. There are no secret keys on this surface.
+Every authenticated call sends `Authorization: Bearer <seller JWT>` and `X-Spree-Seller-Id: sel_…`. The exception is `/seller/me`: `GET` tells the panel which sellers the user can act for, `PATCH` edits the signed-in person's own account. The store is derived from the seller on the server. There are no secret keys on this surface.
 
 ```ts
 import { createSellerClient, SpreeError } from '@spree/seller-sdk'
@@ -17,8 +17,8 @@ client.onUnauthorized(async () => { const { token } = await client.auth.refresh(
 | SDK namespace | Routes (under `/api/v3/seller`) | Notes |
 |---|---|---|
 | `auth` | `POST auth/login`, `auth/refresh`, `auth/logout`, `GET auth/providers`, `GET auth/invitations/:id/lookup`, `POST auth/invitations/:id/accept`, `POST/PATCH auth/password_resets` | Rate limited, returns 429 `rate_limit_exceeded`. The invitation link (ID plus token) is the credential. A wrong token returns 404 |
-| (none) | `GET me` | Doesn't need the seller header |
-| `profile` | `GET/PATCH profile` | Public profile |
+| `me` | `GET me` (`me.get()`), `PATCH me` (`me.update({ first_name, last_name, selected_locale, avatar })`) | No seller header, no seller role needed. Returns `{ user, sellers, … }` where `user` is an `Account` (team-member fields + `selected_locale`). `avatar` takes a direct-upload signed id, or `null` to remove. This is the *person*; the seller business is `profile` |
+| `profile` | `GET/PATCH profile` (`profile.get()` / `profile.update()`) | The seller business's public profile |
 | `taxIdentifiers` | `tax_identifiers` (index/create/update/destroy, `POST :id/validate`) | |
 | `team`, `invitations` | `team` (index/create/destroy), `invitations` (index/destroy, `PATCH :id/resend`) | The seller hires its own staff |
 | `onboarding` | `GET onboarding`, `POST onboarding/submit_for_review`, `POST onboarding/payout_account` | `payoutAccount({ refresh_url, return_url })` returns `{ url }`, where `url` is null if the provider hosts nothing. Mint the link on click because links expire |

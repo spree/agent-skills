@@ -146,7 +146,8 @@ spree rspec spec/models/spree/brand_spec.rb:15   # RSpec with RAILS_ENV=test; ar
 spree logs                              # web logs (spree logs worker for jobs)
 spree db:console                        # psql against the dev database
 spree add dashboard                     # scaffold apps/dashboard (or: spree add seller-dashboard)
-spree plugin new brands                 # scaffold a plugin repo (dashboard half today; Rails engine half coming)
+spree plugin new brands                 # scaffold a dashboard plugin repo (the Rails engine half is a separate spree_extension gem)
+spree encryption init [--print]         # add Active Record encryption keys to .env (never overwrites; --print only prints a set)
 ```
 
 `spree shell` and `spree rspec` still work when the web container is crash-looping: they fall back to a one-off `compose run`.

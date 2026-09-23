@@ -114,6 +114,10 @@ SpreeMultiTenant.current_tenant = Spree::Store.find_by(code: 'my_store').tenant
 Spree::Current.store = Spree::Store.find_by(code: 'my_store')  # Spree 6 code also expects a current store
 ```
 
+### Provisioning a new merchant's store
+
+Seed it inside the tenant with `Spree::Seeds::StoreResources.call(store: store)` (per-store seeds — channels, roles, payment methods, API keys, … — without touching other stores), then `Spree::Stores::ProvisionDefaults.call(store:, country:)` for the country-shaped defaults (market, warehouse, delivery zones, pickup). Optional demo data: `Spree::SampleData::LoadJob.perform_later(store.id)`. See `spree-data-model`.
+
 ### Background jobs
 
 Jobs enqueued while a tenant is current run in that tenant's context. Jobs enqueued outside one (cron/recurring jobs, `without_tenant` blocks) must iterate tenants explicitly:

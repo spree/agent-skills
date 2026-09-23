@@ -119,7 +119,7 @@ module Spree
 end
 ```
 
-The `spree:api_resource` generator (see `spree-resource`) emits the `scoped_resource` line, but it does **not** register the scope. Until you call `register_scope`, only `read_all`/`write_all` keys and the `admin` role can reach the endpoint. Other staff fall through to CanCanCan and get denied, and no key can be minted with `read_reviews`.
+The `spree:api_resource` generator (see `spree-resource`) emits both halves: `scoped_resource :reviews` on the Admin controller, and the matching `register_scope` line appended to `config/initializers/spree.rb` (`--permission-group` picks the group, default `catalog`), plus a label in `config/locales/spree_reviews.en.yml`. Hand-written controllers need both too — a `scoped_resource` without a registered scope means only `read_all`/`write_all` keys and the `admin` role can reach the endpoint, other staff are denied, and no key can be minted with `read_reviews`.
 
 ## How the gate works (Admin API)
 
@@ -293,7 +293,8 @@ end
 - `BaseStrategy` gives you `params`, `request_env`, `user_class`, `success(user)`, `failure(msg)`, `find_user_by_email`, and `find_or_create_user_from_oauth(provider:, uid:, info:, tokens: {})`. The last one maps `provider + uid` to a user through `Spree::UserIdentity`.
 - Password-style strategies implement `authenticate`. Redirect strategies define `def self.kind = :redirect` (plus `self.label` for the button) and implement `authorization_url(state:)` and `callback`. The admin surface has the callback route.
 - Registries support `add(key, klass)` (overwrites, which is also how you replace `:email`), `remove(key)`, `[key]`, `keys`.
-- **Register inside `Rails.application.config.after_initialize`.** Core reassigns the strategy registries in its own `after_initialize`, which wipes anything added at the top level of an initializer or in `to_prepare`. `Spree::UserIdentity` validates `provider` against the registered keys, so a missing registration fails on first login.
+- **Register inside `Rails.application.config.after_initialize`.** Core reassigns the strategy registries in its own `after_initialize`, which wipes anything added at the top level of an initializer or in `to_prepare`. `Spree::UserIdentity` validates `provider` against the keys of the store, admin **and seller** strategy registries, so a missing registration fails on first login.
+- `access_token` / `refresh_token` passed in `tokens:` are stored on the identity and **encrypted at rest** (Active Record encryption, `support_unencrypted_data: true` so pre-encryption rows stay readable) — but only when encryption keys are configured; otherwise plaintext. See `spree-security`.
 - The third-party token is used **once**, at login. After that the client uses Spree's JWT. Don't try to accept foreign tokens on protected endpoints.
 - Link by email only if the IdP guarantees `email_verified`. Linking on an unverified email lets an attacker take over the account.
 
@@ -311,7 +312,7 @@ Spree.admin_user_class = 'MyApp::StaffUser'
 
 ## Gotchas
 
-- **The seeds snippet `Spree::Role.find_or_create_by!(name: 'support')` fails.** Roles need a `resource` (the store). Pass `resource: store`.
+- **`Spree::Role.find_or_create_by!(name: 'support')` fails** — roles belong to a resource (the store, or a seller). Create them through the owner: `store.roles.find_or_create_by!(name: 'support').update!(permissions: %w[read_orders read_customers])`.
 - `Spree.permissions.assign(...)` and permission-set classes (`Spree::PermissionSets::*`) no longer exist. `assign` raises `PermissionSetsRemovedError`. Coming from 5.x? See `spree-upgrade-5-to-6`.
 - New Admin controller returns 500 `MissingScopedResource`: declare `scoped_resource :x` or `skip_scope_check!`.
 - A staff member gets 403 with `required_permission` even though the role "looks right": check the role is on **this** store (the `X-Spree-Store-Id` / host) and the key is spelled exactly (`write_fulfillments`, not `write_shipments`).

@@ -53,16 +53,15 @@ Multi-store *sharing* (one product/promotion/payment method across several store
 ## Building an extension
 
 ```bash
-gem install spree_extension
-spree-extension create reviews          # → ./spree_reviews
+gem install spree_extension -v '>= 2.0'   # 1.x generates a Spree 5 scaffold (spree_admin, importmap) — don't use it
+spree-extension create reviews            # → ./spree_reviews
 cd spree_reviews
 ```
 
-**Clean up the scaffold first.** `spree_extension` 1.0.x still generates Spree 5 pieces:
-- `spree_admin` in the `.gemspec` (`add_dependency 'spree_admin'`) and `Gemfile` → delete both lines (the gem does not exist in Spree 6).
-- `config/importmap.rb`, `bin/importmap`, `app/javascript/`, `vendor/javascript/`, `app/assets/config/*_manifest.js`, and the `.assets` / `.importmap` initializers in `lib/spree_reviews/engine.rb` → delete; admin UI is a dashboard plugin now.
-- `install_admin: true` in the `Rakefile`'s `test_app` task → remove.
-- gemspec `spree_version = '>= 5.4.0.beta'` → bump to `'>= 6.0.0'`.
+The 2.x scaffold depends on `spree_core` + `spree_api` (`>= 6.0.0.beta`), and ships:
+- `lib/spree_reviews/engine.rb` — a `config.to_prepare` that loads every `app/**/*_decorator*.rb` (boot + each dev reload) and a commented `additional_permitted_attributes +=` example.
+- `config/initializers/spree.rb` — the extension's registration file, loaded by the host at boot like any initializer, with commented examples for `register_scope`, `Spree.hooks.register` and an `after_initialize` block for subscribers and registries.
+- `config/routes.rb` — the `Spree::Core::Engine.add_routes` hook, `lib/spree_reviews/factories.rb`, and an `install` generator that copies migrations.
 
 ### Model
 
@@ -119,14 +118,25 @@ Full controller/serializer templates: `spree-resource` (the `spree:api_resource`
 
 ### Registrations — where and when
 
-Put registrations in the engine. **Timing matters**, because core assigns some registries with `=` inside its own `config.after_initialize`, wiping anything appended earlier:
+Registrations go in the extension's `config/initializers/spree.rb`; model-touching code goes in the engine's `config.to_prepare`. **Timing matters**, because core assigns some registries with `=` inside its own `config.after_initialize`, wiping anything appended earlier:
 
 | Registration | Put it in |
 |---|---|
-| `Spree.payment_methods <<`, `Spree.fulfillment_providers <<`, `Spree.integrations <<`, `Spree.stock_splitters <<`, `Spree.tracking_carriers[...] =`, `Spree.adjusters <<`, `Spree.promotions.actions <<`, `Spree.*_authentication_strategies.add` | `config.after_initialize` — core *assigns* these in its own `after_initialize`, which runs first because `spree_core` is required before your engine |
+| `Spree.payment_methods <<`, `Spree.fulfillment_providers <<`, `Spree.integrations <<`, `Spree.stock_splitters <<`, `Spree.tracking_carriers[...] =`, `Spree.adjusters <<`, `Spree.promotions.actions <<`, `Spree.*_authentication_strategies.add` | `Rails.application.config.after_initialize do … end` — core *assigns* these in its own `after_initialize`, which runs first |
 | `Spree.subscribers`, `Spree.delivery_rate_providers`, `tax_providers`, `payout_providers`, `digital_asset_providers`, `pricing_providers`, `inventory_providers`, `order_routing.rules/strategies`, `promotions.rules`, `Spree.reporting` | Seeded before app initializers and core *concatenates* — any point works; `after_initialize` is the safe uniform choice (and avoids autoloading classes mid-boot) |
-| `Spree.hooks.register(...)`, `Spree.permissions.register_scope(...)`, `Spree.search_provider =` | Anywhere (string/registry-based, reload-safe) |
-| `Spree::Product.additional_permitted_attributes += [...]`, decorator loading, anything touching model classes | `config.to_prepare` (re-runs on dev reload) |
+| `Spree.hooks.register(...)`, `Spree.permissions.register_scope(...)`, `Spree.search_provider =` | Top level of the initializer (string/registry-based, reload-safe) |
+| `Spree::Product.additional_permitted_attributes += [...]`, decorator loading, anything touching model classes | Engine `config.to_prepare` (re-runs on dev reload) |
+
+```ruby
+# config/initializers/spree.rb (inside the gem)
+Spree.permissions.register_scope(:reviews, group: :catalog, resources: -> { [Spree::Review] })
+Spree.hooks.register('products.activate.validate', 'SpreeReviews::RequireDescription')
+
+Rails.application.config.after_initialize do
+  Spree.subscribers << SpreeReviews::ReviewRequestSubscriber   # `bin/rails g spree:subscriber` adds these lines
+  Spree.integrations << 'SpreeReviews::Integration'            # if the gem needs per-store credentials
+end
+```
 
 ```ruby
 # lib/spree_reviews/engine.rb
@@ -137,24 +147,16 @@ module SpreeReviews
     engine_name 'spree_reviews'
 
     config.to_prepare do
-      Spree::Product.additional_permitted_attributes += [:reviews_enabled]  # += never << (frozen array)
-
-      Dir.glob(root.join('app/**/*_decorator*.rb')) do |decorator|
+      Dir.glob(SpreeReviews::Engine.root.join('app/**/*_decorator*.rb')) do |decorator|
         Rails.configuration.cache_classes ? require(decorator) : load(decorator)
       end
-    end
-
-    config.after_initialize do
-      Spree.permissions.register_scope(:reviews, group: :catalog, resources: -> { [Spree::Review] })
-      Spree.hooks.register('products.activate.validate', 'SpreeReviews::RequireDescription')
-      Spree.subscribers << SpreeReviews::ReviewRequestSubscriber
-      Spree.integrations << 'SpreeReviews::Integration'   # if the gem needs per-store credentials
+      Spree::Product.additional_permitted_attributes += [:reviews_enabled]  # += never << (frozen array)
     end
   end
 end
 ```
 
-A host app registering the same things from `config/initializers/spree.rb` wraps the core-assigned ones in `Rails.application.config.after_initialize do … end` (what the `spree:subscriber` generator does). `to_prepare` is **not** enough for those — at boot it runs *before* `after_initialize`, so core overwrites it.
+A host app registers the same things the same way from `server/config/initializers/spree.rb`. `to_prepare` is **not** enough for the core-assigned registries — at boot it runs *before* `after_initialize`, so core overwrites it.
 
 What each registration buys you:
 - **`register_scope`** mints `read_reviews` / `write_reviews`, shown in the staff role editor and grantable to secret API keys. Label it in `config/locales/en.yml` under `en.spree.permissions_catalog.resources.reviews.{label,description}`. Options: `write: false`, `audiences:`, `read_only_for:`. See `spree-auth-permissions`.
@@ -191,7 +193,7 @@ Uses RSpec + Factory Bot via `spree_dev_tools`. Put your factories in `lib/spree
 - **Don't rename copied migrations** — the `.<engine_name>.rb` suffix is how Rails skips already-copied ones and how Spree's boot check spots missing ones.
 - **Credentials belong in a `Spree::Integration`** (per store, `:password` preferences are masked), not ENV — a multi-store app pays/ships from different accounts.
 - **Two decorators on the same method** — last loaded wins. Prefer hooks/events so extensions compose.
-- **Subscriber code hot-reloads**; changing the *registration* (engine file) needs a restart.
+- **Subscriber code hot-reloads**; changing a *registration* (the initializer) needs a restart.
 
 ## Where to read further
 

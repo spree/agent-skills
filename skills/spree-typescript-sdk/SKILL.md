@@ -9,7 +9,7 @@ description: Use when the user is building a TypeScript or JavaScript client aga
 |---|---|---|---|
 | `@spree/sdk` | Store API (`/api/v3/store`) | Publishable key + optional customer JWT / guest token | 2.x (currently 2.0 beta) |
 | `@spree/admin-sdk` | Admin API (`/api/v3/admin`) | Secret key **or** staff JWT | 1.x beta |
-| `@spree/seller-sdk` | Seller API (`/api/v3/seller`) | Seller JWT + seller ID (`createSellerClient`, `setSeller`) | 1.x beta. See `spree-marketplace` |
+| `@spree/seller-sdk` | Seller API (`/api/v3/seller`) | Seller JWT + seller ID (`createSellerClient`, `setSeller`) | 1.x beta. Singletons use `get`/`update` like the admin SDK (`seller.me.get()`, `seller.me.update({ selected_locale })`, `seller.profile.update(…)`). See `spree-marketplace` |
 | `@spree/sdk-core` | Shared HTTP, retry, errors | — | Internal, never published. Don't import it |
 
 All three expose the same shape and share `SpreeError`, retry, idempotency and a `request` escape hatch. They target Spree 6. Spree 6 storefronts need `@spree/sdk` 2.x. Pre-release versions may need an explicit version or dist-tag when installing, so check npm.
