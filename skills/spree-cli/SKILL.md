@@ -1,17 +1,17 @@
 ---
 name: spree-cli
-description: Use when calling the Spree Admin API from the command line or driving it programmatically as an agent — exploring endpoints, reading or mutating store data, and especially DEBUGGING (inspecting an order/product/customer, checking why a request failed, reproducing a 403/422). The `spree api` command group in `@spree/cli` is a `gh api`-style generic HTTP client: `spree api get|post|patch|delete <path>` plus offline discovery (`spree api endpoints`, `spree api schema`). Common phrasings include "spree api", "spree CLI", "call the admin API from the terminal", "spree api get", "inspect this order", "why is this Spree request failing", "list admin endpoints", "spree auth". For SDK/TypeScript integration use spree-typescript-sdk; for raw API protocol details use spree-api-v3.
+description: Use when calling the Spree 6 Admin API from the command line or driving it programmatically as an agent — exploring endpoints, reading or mutating store data, and especially DEBUGGING (inspecting an order/product/customer, checking why a request failed, reproducing a 403/422). The `spree api` command group in `@spree/cli` is a `gh api`-style generic HTTP client: `spree api get|post|patch|delete <path>` plus offline discovery (`spree api endpoints`, `spree api schema`). Common phrasings include "spree api", "spree CLI", "call the admin API from the terminal", "spree api get", "inspect this order", "why is this Spree request failing", "list admin endpoints", "spree auth". Also covers the project-side dev commands agents reach for while debugging (`spree shell`, `spree rspec`, `spree console`, `spree add`, `spree plugin new`). For SDK/TypeScript integration use spree-typescript-sdk; for raw API protocol details use spree-api-v3.
 ---
 
 # Spree CLI — Admin API from the terminal
 
 `@spree/cli` ships a `spree api` command group: a generic Admin API v3 client modeled on `gh api`. It is the fastest way to inspect and manipulate store data from a terminal, and the most reliable way for an **agent to debug** — no SDK boilerplate, structured JSON in/out, and offline endpoint discovery.
 
-It works against **any Spree 5.5+ instance**. Inside a local project it self-provisions a read-only key; for any other server you supply a key.
+`spree api` talks to the **Admin API only** (`/api/v3/admin`, secret key auth). It can't call the Store or Seller APIs; use `curl` or the SDKs for those. It works against any Spree 6 instance (and 5.5+). Inside a local project it provisions a read-only key for itself; for any other server you supply a key.
 
 ## When to reach for the CLI
 
-- **Debugging** — "what state is order `ord_x` in?", "why did this 403?", "does this product have the variant I expect?". One command, JSON back, pipe to `jq`.
+- **Debugging** — "what status is order `or_x` in?", "why did this 403?", "does this product have the variant I expect?". One command, JSON back, pipe to `jq`.
 - **Exploring the API** — list endpoints and their required scopes, dump an operation's schema, all offline.
 - **Scripting / agents** — deterministic, pipeable, exit-coded. No client to instantiate.
 
@@ -37,7 +37,7 @@ Credentials resolve in this order (first match wins); host and key always resolv
    SPREE_API_KEY=sk_xxx spree api get /products            # → localhost:3000
    SPREE_BASE_URL=https://store.example.com SPREE_API_KEY=sk_xxx spree api get /orders
    ```
-3. **Inside a local Spree project** (a dir with `docker-compose.yml`, dev stack running): zero config. The first `spree api` call mints a **read-only** key via the dev stack and saves it to `.spree/credentials.json` (gitignored). Just run commands.
+3. **Inside a local Spree project** (a dir with `docker-compose.yml`, Rails app in `server/`, or legacy `backend/`, and the dev stack running): zero config. The first `spree api` call mints a **read-only** key via the dev stack and saves it to `.spree/credentials.json` (gitignored). Just run commands.
 4. **Default profile** (the first profile you `spree auth login` becomes the default; key read from a prompt, never a flag):
    ```bash
    spree auth login --profile prod --base-url https://store.example.com
@@ -65,13 +65,13 @@ Scopes follow `read_<resource>` / `write_<resource>` (`write_*` implies `read_*`
 ```bash
 # Read — Ransack filters as repeatable -q, plus sort/page/limit/expand/fields
 spree api get /products -q status_eq=active -q name_cont=shirt --sort -created_at --limit 10
-spree api get /orders/ord_x8k2J9aQ --expand items,payments,fulfillments
-spree api get /products --fields name,price          # id is always returned
+spree api get /orders/or_x8k2J9aQ --expand items,payments,fulfillments
+spree api get /products --fields name,slug,status     # id is always returned
 
 # Write — JSON body inline, from @file, or '-' for stdin
-spree api post /products -d '{"name":"Classic Tee","price":29.99}'
-spree api patch /orders/ord_x8k2J9aQ/cancel
-spree api post /orders/ord_x8k2J9aQ/refunds -d @refund.json
+spree api post /products -d '{"name":"Classic Tee","prices":[{"currency":"USD","amount":"29.99"}]}'
+spree api patch /orders/or_x8k2J9aQ/cancel
+spree api post /orders/or_x8k2J9aQ/refunds -d @refund.json
 cat prices.json | spree api post /prices/bulk_upsert -d -
 spree api delete /products/prod_86Rf07xd
 ```
@@ -106,13 +106,13 @@ When a request or app behavior is wrong, the CLI is the fastest probe. A typical
 
 ```bash
 # 1. Reproduce the read and see the actual state
-spree api get /orders/ord_x8k2J9aQ --expand payments,fulfillments | jq '.state, .payment_state'
+spree api get /orders/or_x8k2J9aQ --expand payments,fulfillments | jq '.status, .payment_status, .fulfillment_status'
 
 # 2. If a write failed, find the endpoint's contract
 spree api schema "PATCH /orders/{id}/cancel"
 
 # 3. Re-run the write and read the error envelope verbatim
-spree api patch /orders/ord_x8k2J9aQ/cancel
+spree api patch /orders/or_x8k2J9aQ/cancel
 ```
 
 ### Reading errors
@@ -135,9 +135,32 @@ A **validation error** (`422`, `code: validation_error`) puts per-attribute mess
 
 `spree api status` diagnoses the credential/reachability layer when calls fail before reaching the API at all (wrong host, expired/typo'd key).
 
+## Beyond `spree api`: project commands for debugging
+
+In a scaffolded project (Docker dev stack), these commands run inside the web container. In a classic Rails app without Docker, use the native equivalents (`bin/rails console`, `bundle exec rspec`, …).
+
+```bash
+spree console                           # Rails console: Spree::Cart.find_by_prefix_id!('cart_…')
+spree shell                             # interactive bash in the web container (alias: spree bash)
+spree rspec spec/models/spree/brand_spec.rb:15   # RSpec with RAILS_ENV=test; args pass straight through
+spree logs                              # web logs (spree logs worker for jobs)
+spree db:console                        # psql against the dev database
+spree add dashboard                     # scaffold apps/dashboard (or: spree add seller-dashboard)
+spree plugin new brands                 # scaffold a plugin repo (dashboard half today; Rails engine half coming)
+```
+
+`spree shell` and `spree rspec` still work when the web container is crash-looping: they fall back to a one-off `compose run`.
+
+### What `spree api` can't see
+
+- **Shopper carts.** The Admin API exposes orders (`/orders`, `/order_groups`) but not in-progress carts. Inspect those in `spree console` or through the Store API with the cart token.
+- **Store/Seller API responses.** Use `curl` with a `pk_` key (Store) or the seller SDK.
+
 ## Gotchas
 
 - The bundled spec for `endpoints`/`schema` reflects the **CLI's** Spree version, not necessarily the live server's — `spree api status` shows the bundled version. If an endpoint is missing from `endpoints` but exists on the server, the CLI may be older.
 - `--api-key` on the command line leaks into shell history — prefer `SPREE_API_KEY` or a profile.
 - Auto-minted project keys are read-only by design; a write returning 403 in a fresh project means you need an explicit scoped key, not a bug.
+- Secret-key scopes can't be edited after creation. For different access, mint a new key and revoke the old one (`spree api-key revoke <id>`).
+- Multi-store host? Pass `--store-id <store_…>` (sent as `X-Spree-Store-Id`).
 - The CLI talks to a **running** server; it can't bootstrap one. Inside a project, ensure the dev stack is up (`spree dev`).

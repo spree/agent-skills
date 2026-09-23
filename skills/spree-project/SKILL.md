@@ -1,128 +1,147 @@
 ---
 name: spree-project
-description: Use when the user is working on a Spree Commerce project — anything involving Spree models, controllers, customization patterns (decorators, subscribers, services), Spree conventions like prefixed IDs / Spree::Model namespacing / Spree.user_class / Spree::Current, or asking how Spree works. Activates broadly for any task in a Spree backend.
+description: Use for any work in a Spree Commerce 6 project — orienting in the repo (server/, apps/dashboard, apps/storefront), detecting the project flavor (create-spree-app + `spree` CLI vs a classic Rails app), running commands, following Spree conventions (Spree:: namespace, Spree.base_class, Spree.customer_class, current_store scoping, has_status, prefixed IDs, custom fields vs metadata), and finding the right docs. Activates broadly — "how does Spree work", "where do I put this", "how do I run X in my Spree app", "what are the Spree conventions", "set up a Spree project". Routes to spree-customization when the question is which extension pattern to use.
 ---
 
-# Spree Commerce Project
+# Spree Commerce Project (Spree 6)
 
-A Rails application powered by [Spree Commerce](https://spreecommerce.org).
+Spree is a headless commerce engine: a Rails app (the `spree` gems) that serves the Store, Admin and Seller REST APIs, plus TypeScript apps you own (a React admin dashboard and a Next.js storefront). Customization happens *around* the engine — configuration, hooks, events, providers — not by forking it.
 
-## Project flavors — detect FIRST, it changes every command
+> Coming from Spree 5.x? Read the `spree-upgrade-5-to-6` skill first — cart/order split, no state machines, React dashboard, API v2 and `spree_admin` removed.
 
-Not every Spree app is a `create-spree-app` project. Check these signals in order before running anything:
+## Detect the project flavor FIRST — it changes every command
 
 | Signal | Flavor | How commands run |
 |---|---|---|
-| `backend/Gemfile` mentions spree + `docker-compose.yml` at root | **create-spree-app project** (5.4+) | `spree <cmd>` — the `@spree/cli` routes into the Docker `web` container |
-| Rails app at root (`config/application.rb`, Gemfile with spree) + `docker-compose.yml` with a Spree image/build | **spree-starter-style Docker app** | `spree <cmd>` if the CLI resolves (`npx spree --version`); else `docker compose exec web <cmd>` |
-| Rails app at root with spree gems, no Docker wiring | **classic Rails app** (typical pre-5.4) | Native, from the app root: `bin/rails …`, `bundle exec rake …` |
+| `server/Gemfile` (or legacy `backend/Gemfile`) + `docker-compose.yml` + `package.json` with `@spree/cli` | **create-spree-app project** | `spree <cmd>` — the CLI routes into the Docker `web` container |
+| Rails app at the repo root (`config/application.rb`, `Gemfile` with `spree` gems), no `server/` | **classic Rails app** | Native from the app root: `bin/rails …`, `bundle exec rake …` |
 
-Command mapping — Spree CLI form → classic-app native form:
+If `spree` isn't on PATH, use `npx spree …` / `pnpm exec spree …`. The CLI accepts both `server/` and the older `backend/` directory name.
 
-| Task | Spree CLI (Docker) | Classic Rails app |
+| Task | Spree CLI | Classic Rails app |
 |---|---|---|
-| Boot for development | `spree dev` | `bin/dev` (or `bin/rails server`) |
+| Run the stack | `spree dev` | `bin/dev` or `bin/rails server` |
 | Rails console | `spree console` | `bin/rails console` |
-| Install + run migrations | `spree migrate` | `bin/rake spree:install:migrations && bin/rails db:migrate` |
-| Version upgrade | `spree upgrade` | `bundle update <spree gems>`, migrations, then `bin/rake spree:upgrade` |
-| Run a generator | `spree generate api_resource …` | `bin/rails g spree:api_resource …` (spell the `spree:` prefix yourself — auto-prefixing is a CLI feature) |
-| Any rake task | `spree rake <task>` | `bundle exec rake <task>` |
-| Seeds / sample data | `spree seed` / `spree sample-data` | `bin/rails db:seed` / `bin/rails spree:load_sample_data` |
-| Arbitrary command | `spree exec <cmd>` | just run `<cmd>` |
+| Shell in the container | `spree shell` | (you're already in one) |
+| Install + run migrations | `spree migrate` | `bin/rails spree:install:migrations && bin/rails db:migrate` |
+| Generator | `spree generate api_resource Brand …` (bare names auto-prefix `spree:`) | `bin/rails g spree:api_resource Brand …` |
+| Run specs | `spree rspec spec/models/…` (RAILS_ENV=test) | `bundle exec rspec spec/models/…` |
+| Rake task | `spree rake <task>` / `spree task <name>` (auto `spree:` prefix) | `bundle exec rake <task>` |
+| Sample data | `spree sample-data` | `bin/rails spree:load_sample_data` |
+| Version upgrade | `spree upgrade` | `bundle update spree…`, migrate, `bin/rails spree:upgrade` |
+| Anything else | `spree exec <cmd>` | `<cmd>` |
 
-Other flavor differences:
-- **Rails root**: `backend/` in create-spree-app projects, `.` in classic apps. Paths written as `backend/app/…` in these skills mean `app/…` on a classic app.
-- **Local docs** (`node_modules/@spree/docs/dist/`) exist only when the project installs `@spree/docs`. On classic apps, use https://spreecommerce.org/docs/llms.txt instead.
-- The rake tasks themselves (`spree:install:migrations`, `spree:upgrade`, the `spree:model`/`spree:api_resource` generators) ship inside the spree gems and work identically in both flavors — only the invocation wrapper differs. Note `spree:upgrade` and the generators ship in spree_core **5.5+**: a pre-5.5 app gains them after the `bundle update` step of the upgrade, so on old apps run the gem bump first.
+Paths written `server/app/...` in these skills mean `app/...` in a classic app.
 
-## create-spree-app project layout
+## Project layout (create-spree-app)
 
-| Directory | Description |
-|---|---|
-| `backend/` | The Rails app — Spree mounted as an engine |
-| `apps/storefront/` | Optional Next.js storefront |
-| `node_modules/@spree/docs/dist/` | Local copy of Spree developer docs |
-
-All Spree-specific code (models, decorators, subscribers) lives under `backend/app/`.
-
-## Where to find Spree documentation
-
-When you need Spree-specific guidance — how a model works, what events are available, how the cart pipeline runs — read the local docs first:
-
-```
-node_modules/@spree/docs/dist/
-├── developer/
-│   ├── core-concepts/       Products, orders, payments, inventory
-│   ├── customization/       Decorators, extensions, dependencies, events
-│   ├── admin/               Admin panel customization
-│   ├── storefront/          Storefront building guides
-│   ├── sdk/                 TypeScript SDK documentation
-│   └── tutorial/            Step-by-step guides
-├── api-reference/
-│   ├── store-api/           Store API v3 guides
-│   └── store.yaml           OpenAPI spec — every Store API endpoint
-└── integrations/            Stripe, Meilisearch, etc.
+```text
+my-store/
+├── server/                 # The Spree API — a full Rails 8.1 app (spree-starter). Your Ruby code lives here.
+│   ├── app/{models,services,workflows,subscribers,controllers,serializers}/
+│   ├── config/initializers/spree.rb   # hooks, registries, dependencies, subscribers
+│   ├── Dockerfile          # builds the production image (API + dashboard)
+│   └── Gemfile
+├── apps/
+│   ├── dashboard/          # React admin (@spree/dashboard) — plugins in src/plugins.ts
+│   ├── seller-dashboard/   # Marketplace seller panel (optional)
+│   └── storefront/         # Next.js storefront on @spree/sdk (optional)
+├── docker-compose.yml      # prebuilt ghcr.io/spree/spree image + Postgres (Meilisearch optional, commented out)
+├── .env                    # SECRET_KEY_BASE, SPREE_PORT, SPREE_VERSION_TAG…
+├── AGENTS.md / CLAUDE.md   # generated agent instructions
+└── package.json            # pins @spree/cli
 ```
 
-Reach for these before guessing from training data. The local docs are the authoritative source for the installed Spree version.
-
-## Customization patterns
-
-90% of work on a Spree project is customization: wiring in external services, adding custom models, tweaking behavior. Spree exposes a layered set of extension points for this — settings, configuration, events, dependency injection, admin extension APIs, the resource generator, decorators, gems. Picking the right one matters because each layer has different upgrade-safety characteristics.
-
-**For routing a specific customization to the right pattern, use the `spree-customization` skill.** It has the full decision table (subscribers vs decorators vs `Spree.dependencies` vs admin APIs vs `Spree.ransack`) with worked examples. Reach for it whenever the right approach isn't obvious.
-
-Quick summary of the priority order:
-
-1. **Settings / `Spree::Config`** — for runtime behavior toggles.
-2. **Events + subscribers** — for side effects ("sync to ERP when order completes").
-3. **Dependency injection** (`Spree.dependencies`) — for swapping how a core service computes. See `spree-dependencies` skill.
-4. **Admin extension APIs** (`Spree.admin.navigation`, `Spree.admin.partials`, `Spree.admin.tables`, `Spree.ransack`) — for admin UI and search.
-5. **Generators** (`spree:api_resource`, `spree:model`) — for brand-new models / resources.
-6. **Decorators** (`spree:model_decorator`, `spree:controller_decorator`) — for structural changes to existing Spree classes.
-7. **Extensions** (gems) — only when sharing customization across multiple apps.
+- **`server/` is the only part that is Spree's.** The apps are ordinary Vite/Next.js projects you own.
+- By default the stack runs the **prebuilt image**. To change Ruby code, run `spree eject` once — compose then builds from `server/`.
+- Stack: Rails 8.1, Ruby ≥ 3.2; PostgreSQL, MySQL or SQLite. Background jobs run in-process via **Solid Queue** (Mission Control at `/jobs`), Solid Cache; Sidekiq/Redis is optional. The dashboard is served at `/dashboard` by the `spree_dashboard` gem in production (one image, same origin).
+- APIs: Store `/api/v3/store` (publishable key `pk_…`), Admin `/api/v3/admin` (secret key `sk_…` or staff JWT), Seller `/api/v3/seller` (seller JWT + `X-Spree-Seller-Id`). See `spree-api-v3`.
 
 ## Conventions you should always follow
 
-- **Namespace under `Spree::`** — all Spree-related Ruby classes live in `app/models/spree/`, `app/controllers/spree/`, etc.
-- **`Spree.user_class` / `Spree.admin_user_class`** — never reference `Spree::User` directly. The user class is configurable.
-- **`Spree::Current.store` / `.currency` / `.locale`** — per-request context, available in models, controllers, services.
-- **Prefixed IDs in the API** — every v3 API response returns Stripe-style prefixed IDs (`prod_86Rf07xd4z`, `or_m3Rp9wXz`). Never expose raw integer IDs. Same on writes — the API accepts prefixed IDs.
-- **`Spree.base_class`** — inherit from this, not `ActiveRecord::Base`. It applies Spree's base configuration.
+- **Namespace under `Spree::`**, files under `server/app/models/spree/…` etc. Your own non-Spree classes can use your app namespace (`MyApp::…`).
+- **Inherit from `Spree.base_class`** (defaults to `Spree::Base`), not `ApplicationRecord`. It brings preferences, prefixed IDs, ransack allowlists, document numbers, `additional_permitted_attributes`.
+- **Users are two classes:** `Spree.customer_class` (default `Spree::Customer`, table `spree_customers`, `cust_…`) and `Spree.admin_user_class` (`Spree::AdminUser`, `adm_…`). Never hardcode either. `Spree.user_class` is a deprecated alias.
+- **Scope every query through the store**: `current_store.products`, `store.orders` — never `Spree::Order.all` in request code. In dev/test `SPREE_STORE_SCOPE_GUARD=log|raise|off` flags unscoped queries.
+- **`Spree::Current`** carries per-request `store`, `channel`, `market`, `currency`, `locale`. `Spree::Current.store` falls back to `Spree::Store.default`, which **can be nil** (no store flagged default) — set `Spree::Current.store = store` explicitly in jobs, rake tasks and specs.
+- **No state machines, no enums for lifecycles.** Statuses are string `status` columns declared with `has_status` (`Spree::HasStatus`); transitions are **workflows** (`app/workflows`). Extend with `Model.add_status('on_hold', after: 'approved')` — plus your own workflow to move records into it. See `spree-workflows`.
+- **`belongs_to` is required by default** — pass `optional: true` when the FK may be nil, or saves fail with "… must exist". Always pass `class_name:` and an explicit `dependent:` on `has_many`.
+- **No DB foreign keys on business tables**; add an index instead. Uniqueness validations are store-scoped in core.
+- **IDs are strings at the API surface** — Stripe-style prefixed IDs (`prod_…`, `cart_…`, `or_…`, `py_…`). Look up with `Model.find_by_prefix_id!(id)`; never `.to_i` an ID and never expose integer IDs. Full table: `spree-data-model`.
+- **Cart ≠ Order.** `Spree::Cart` is mutable checkout state; completing it creates an immutable `Spree::Order` (`status` draft/placed/canceled). Code that runs on both reads `line_item.owner`, not `.order`.
+- **Custom data:** merchant-facing, typed, filterable → **custom fields** (`product.set_custom_field('custom.material', 'Cotton')`, `get_custom_field`). Machine/integration data → **`metadata`** (schemaless JSON, write-only in Store API). A new *column* only when your own code queries it heavily.
+- **Side effects go in events / hooks, not callbacks.** React after the fact with a `Spree::Subscriber` (`order.placed`, …); run inside a flow with `Spree.hooks.register('carts.complete.validate', …)`. Don't add `after_save` to Spree models.
+- **Writable API attributes:** `Spree::Product.additional_permitted_attributes += [:brand_id]` — `+=`, never `<<` (the default is frozen).
+- **Services return results, not exceptions:** `result = Spree.cart_add_item_workflow.call(...)`; check `result.success?`.
+- **Money in the API is a string** (`"135.60"`) with a `display_…` twin — render the display one.
+- **Secrets** go in Rails credentials or env vars; Spree's installation settings are all `SPREE_*` env vars (see `spree-customization`).
 
-## Common commands
+## Where customization goes (short version)
 
-`@spree/cli` (installed by `create-spree-app`) wraps the Docker-based dev workflow:
+Walk this list top-down — higher options are cheaper and survive upgrades better. The `spree-customization` skill has the full decision table.
+
+1. **Store settings** (dashboard → Settings; Admin API) — markets, currencies, delivery, taxes, order numbering. Data, not code.
+2. **Configuration** — `SPREE_*` env vars / `Spree.config`; per-record `preference`s.
+3. **Workflow hooks** — `Spree.hooks.register('<flow>.<hook>', 'MyApp::Handler')` to veto or extend a core flow (`spree-workflows`).
+4. **Events & subscribers** — react after something happened (`spree-events-webhooks`).
+5. **Checkout registry** — `Spree::Checkout::Registry.add_requirement` / `register_step` (`spree-checkout`).
+6. **Providers** — tax, delivery rates, fulfillment, search, pricing, inventory, payouts, digital assets, auth (`spree-providers`).
+7. **Ransack allowlists** — `Spree.ransack.add_attribute(Spree::Product, :erp_id)`.
+8. **Webhooks** — notify external systems without Ruby.
+9. **Dependencies** — replace a whole workflow/service: `Spree::Dependencies.cart_add_item_workflow = 'MyApp::Carts::AddItem'` (`spree-dependencies`).
+10. **Decorators** — last resort, for structural additions (associations, scopes) (`spree-decorators`).
+
+Admin UI changes happen in the React dashboard via plugins (`spree-dashboard`, `spree-dashboard-plugins`), not in Rails views.
+
+## Common CLI commands
 
 ```bash
-spree dev                          # run the stack in the foreground (streams logs; Ctrl+C stops web + worker, DBs stay up)
-spree stop                         # tear down
-spree console                      # Rails console
-spree logs                         # follow web container logs
-spree restart                      # restart the Rails process
-
-spree migrate                      # install engine migrations from gems + db:migrate
-spree generate <name> [args]       # any Spree generator
-spree bundle add <gem>             # add a gem (persists in bundle_cache volume)
-spree rake <task>                  # any rake task
-spree exec <cmd>                   # universal escape hatch
-spree rails <cmd>                  # any bin/rails command
-spree routes                       # show Rails routes
-spree seed                         # seed the database
-spree sample-data                  # load sample products/categories/images
-spree user create                  # create an admin user
-spree api-key create               # create an API key (also: list, revoke)
-spree db:reset                     # drop + recreate + migrate + seed (destructive)
-
-spree upgrade                      # version upgrade
+spree dev                      # run API (+ dashboard dev server if apps/dashboard exists); first run completes setup
+spree stop | restart | logs [worker]
+spree console | shell | db:console
+spree migrate | migrate:status | migrate:rollback
+spree generate api_resource Brand name:string   # → spree:api_resource
+spree generate subscriber ErpSync order.placed   # class + registration in initializers/spree.rb
+spree rspec [path[:line]]      # tests in RAILS_ENV=test (first: spree rails db:test:prepare)
+spree bundle add <gem>         # gem lands in the bundle_cache volume, no rebuild
+spree eject                    # build from server/ instead of the prebuilt image
+spree build [--production]     # rebuild dev image / build the production image (API + dashboard)
+spree add dashboard            # add apps/dashboard (also: spree add seller-dashboard)
+spree plugin new <name>        # scaffold a dashboard plugin monorepo
+spree update                   # pull latest image, recreate containers (migrations run on boot)
+spree upgrade [--plan]         # bundle update + migrate + spree:upgrade data steps
+spree seed | sample-data | user create | api-key create|list|revoke
+spree rails spree:setup:token  # reprint the first-run admin setup link
+spree api <verb> <path>        # call the Admin API from the terminal (see spree-cli)
 ```
 
-If you don't have `spree` on your PATH, prefix with the package runner: `npx spree …`, `pnpm exec spree …`, or `bunx spree …`.
+`spree db:reset` is destructive — confirm with the user before running it.
+
+## Where to find Spree documentation
+
+Read the installed docs before guessing from training data — they match the installed version:
+
+```text
+node_modules/@spree/docs/dist/
+├── developer/
+│   ├── getting-started/  create-spree-app/  cli/
+│   ├── core-concepts/    # products, carts, orders, payments, fulfillments, markets, …
+│   ├── customization/    # quickstart, configuration, workflows, dependencies, decorators, permissions, validations
+│   ├── providers/        # ERP, PIM, DAM, fulfillment, payouts, SSO, observability
+│   ├── how-to/           # custom payment method, delivery rate provider, search provider, B2B, marketplace…
+│   ├── dashboard/        # React admin: customization, plugins, recipes
+│   ├── sdk/  storefront/  multi-tenant/  security/  deployment/  upgrades/  tutorial/
+└── api-reference/        # Store/Admin API guides + OpenAPI specs
+```
+
+- No local package (classic app)? Use https://spreecommerce.org/docs/llms.txt (index) or append `.md` to any docs URL.
+- The **Spree docs MCP server** (`https://spreecommerce.org/docs/mcp`) searches the latest published docs: `claude mcp add --transport http spree-docs https://spreecommerce.org/docs/mcp`.
+- Never use `docs/v5/` pages for a Spree 6 project.
 
 ## When in doubt
 
-- Not sure which customization pattern fits? See the `spree-customization` skill — it routes the decision.
-- Need to add a new model + API endpoint? See the `spree-resource` skill.
-- Need to extend an existing Spree model/controller? See the `spree-decorators` skill.
-- Need to upgrade Spree? See the `spree-upgrade` skill.
-- Need details on a specific Spree concept? Read `node_modules/@spree/docs/dist/developer/` first.
+- Which extension pattern? → `spree-customization`
+- How models relate, which ID prefix, which status values? → `spree-data-model`
+- New model + API endpoint? → `spree-resource`
+- Hooks / writing a workflow? → `spree-workflows`
+- Tests? → `spree-testing`. Upgrading? → `spree-upgrade` / `spree-upgrade-5-to-6`.

@@ -1,218 +1,291 @@
 ---
 name: spree-checkout
-description: Use when the user is working on Spree's checkout flow — cart pipeline, order state machine, address handling, the transition from cart to completed order, customizing checkout steps, payment sessions, guest checkout. Common phrasings include "checkout broken", "order stuck in X state", "skip address step", "guest checkout", "cart not advancing", "payment session", "customize checkout flow", "add a checkout step". Provides the order state machine, the cart pipeline, and the customization hooks.
+description: Use when the user is working on Spree 6 checkout — the Cart → Order split, checkout requirements and advisory steps, `Spree::Checkout::Registry` (add_requirement / register_step / base_steps), cart completion (`Spree::Carts::Complete`), `carts.complete` / `carts.add_item` workflow hooks, addresses, payment sessions, guest checkout, cart association/merge on login, or the Store API / `@spree/sdk` checkout sequence. Common phrasings include "checkout broken", "cart won't complete", "why can't this cart complete", "add a checkout step", "require a field before checkout", "require terms acceptance", "skip the delivery step", "order stuck", "double charge", "guest checkout", "cart not found after checkout", "merge carts on login", "custom checkout validation", "block checkout if…". Covers where each customization belongs and how completion guarantees idempotency.
 ---
 
 # Spree Checkout
 
-Checkout is how a cart becomes a completed order. In Spree, an Order is the cart (while in cart state) AND the completed transaction (post-complete); the `state` column tracks which phase you're in.
+Checkout in Spree 6 is **data-driven, not a state machine**. A `Spree::Cart` collects items, addresses, delivery and payment in any order; the cart reports what it still needs (`requirements`); and exactly one hard gate — the `Spree::Carts::Complete` workflow — turns it into an immutable `Spree::Order`.
 
-## The order state machine
+> Coming from 5.x (`order.next!`, `checkout_flow`, `state`)? Those APIs are gone — see `spree-upgrade-5-to-6`.
 
-Default checkout flow on an Order:
+## Cart vs Order
 
-```
-cart  →  address  →  delivery  →  payment  →  confirm  →  complete
-```
+| | `Spree::Cart` (`cart_…`) | `Spree::Order` (`or_…`) |
+|---|---|---|
+| Phase | Shopping + checkout | Placed purchase (financial record) |
+| Lifecycle marker | `completed_at` only — **no status column** | `status` (`draft`/`placed`/`canceled`) + `payment_status` / `fulfillment_status` |
+| Mutable? | Yes, until completed; then **read-only** (`readonly?` blocks every write) | Items/prices frozen; admin edits go through explicit services |
+| Checkout introspection | `requirements`, `checkout_steps`, `current_checkout_step`, `completed_checkout_steps` | None — it's already placed |
+| Money | Rows regenerated on every recalculation | Rows frozen; totals only re-summed |
 
-Each step is conditional. Looking at `Spree::Order.checkout_flow`:
+Records that live through both phases — `LineItem`, `Fulfillment`, `Payment`, `PaymentSession`, `StockReservation`, `TaxLine`, `Discount`, `Fee` — carry **two nullable FKs** (`cart_id` + `order_id`, exactly one set). Always read the parent through `#owner`:
 
 ```ruby
-checkout_flow do
-  go_to_state :address
-  go_to_state :delivery, if: ->(order) { order.delivery_required? }
-  go_to_state :payment,  if: ->(order) { order.payment? || order.payment_required? }
-  go_to_state :confirm,  if: ->(order) { order.confirmation_required? }
-  go_to_state :complete
+line_item.owner   # => Spree::Cart during checkout, Spree::Order after
+line_item.order   # nil during checkout — don't assume it's present
+```
+
+Shared behavior (addresses, taxation, store credit, gift cards, payment processing, currency/market) lives in `Spree::Purchase::*` concerns included by both models. Decorate the concern (or use a hook) rather than only `Spree::Order`.
+
+`order.cart` points back at the source cart; `spree_orders.cart_id` is **unique** — it's the completion idempotency key.
+
+## Requirements: the one thing checkout enforces
+
+Every cart read computes `Spree::Checkout::Requirements.new(cart).call` → an array of `{ step:, field:, code:, message: }`. Branch on `code`; `message` is translated prose; `step` is a grouping hint.
+
+Built-in advisory requirements (reported on every cart read):
+
+| `code` | `step` | Raised when |
+|---|---|---|
+| `line_items_required` | `cart` | Cart is empty |
+| `email_required` | `address` | No email |
+| `ship_address_required` | `address` | Something ships and there's no address |
+| `delivery_method_required` | `delivery` | A fulfillment has no delivery method selected |
+| `payment_required` | `payment` | Valid payments don't cover `amount_due_at_checkout` |
+| `po_number_required` | `address` | The buyer's company requires a PO number (staff-keyed carts exempt) |
+| `order_minimum_not_met` | `cart` | Below the B2B order minimum |
+
+Completion-only checks (`call(completion: true)`, run inside `Carts::Complete` because they load every line item): `out_of_stock`, `discontinued`, `quantity_rule_violated` (all `step: 'cart'`), and `guest_checkout_not_allowed`.
+
+**An empty `requirements` array does not guarantee completion will succeed.** Treat a failed completion as a normal path.
+
+## Steps are advisory
+
+```ruby
+cart.checkout_steps             # => ["address", "delivery", "payment", "complete"]
+cart.current_checkout_step      # => step of the first unmet requirement ("cart" reports as "address")
+cart.completed_checkout_steps   # => steps before the current one
+```
+
+The Store API exposes these as `current_step` and `completed_steps`. Built-in steps come from `Spree::Checkout::Registry.base_steps`:
+
+| Step | Present when |
+|---|---|
+| `address` | Always |
+| `delivery` | `cart.delivery_step_required?` (has items, not all-digital) |
+| `payment` | `cart.payment_required?` (total above zero) |
+| `confirm` | `cart.confirmation_required?` (a payment method asks, or store preference) |
+| `complete` | Always |
+
+Nothing on the server refuses a write because of the step — clients may set email, address, delivery and payment in any order. A free digital order reports `address` → `complete`; don't hardcode five steps in a storefront.
+
+## Customizing: `Spree::Checkout::Registry`
+
+Configure in `server/config/initializers/spree.rb`. One declaration feeds **both** the `requirements` array and the completion gate.
+
+Registration timing: the Registry is plain class-level state loaded from `lib/` — core never resets it at boot (only `Registry.reset!`, meant for tests), so top-level initializer calls or a `Rails.application.config.after_initialize` block both work. Avoid `config.to_prepare`: it re-runs on every dev code reload and `add_requirement` / `register_step` append without de-duplicating, so each reload adds another copy of the requirement.
+
+### Add a requirement to an existing step
+
+```ruby
+# Require accepting terms before placing the order (stored in cart metadata,
+# written by the storefront via PATCH /carts/:id { metadata: { terms_accepted: true } })
+Spree::Checkout::Registry.add_requirement(
+  step: :payment,
+  field: :terms_accepted,                       # code becomes "terms_accepted_required"
+  message: 'You must accept the terms of sale',
+  satisfied: ->(cart) { ActiveModel::Type::Boolean.new.cast(cart.metadata['terms_accepted']) },
+  applicable: ->(cart) { cart.market&.name == 'Europe' } # optional, checked before satisfied:
+)
+```
+
+- `code` is always derived as `"#{field}_required"` for added requirements.
+- `message` is stored verbatim at boot — a `Spree.t` call here resolves once, in the boot locale. For per-request translation use `register_step` (its `requirements:` lambda runs per cart).
+- `Spree::Checkout::Registry.remove_requirement(step:, field:)` removes one you (or an extension) registered.
+
+PO numbers are already built in: set `po_number_required` on the company and the cart reports `po_number_required` (see `spree-b2b`). Don't re-register it.
+
+### Add a whole step
+
+```ruby
+Spree::Checkout::Registry.register_step(
+  name: :loyalty,
+  before: :payment,                                  # or after:; before: wins if both
+  applicable: ->(cart) { cart.customer.present? },
+  satisfied: ->(cart) { cart.metadata['loyalty_number'].present? },
+  requirements: ->(cart) {
+    [{ step: 'loyalty', field: 'loyalty_number', code: 'loyalty_number_missing',
+       message: Spree.t('loyalty.number_required', default: 'Enter your loyalty number') }]
+  }
+)
+```
+
+Unanchored steps (or anchors this cart doesn't have, like `before: :payment` on a free cart) land right before `complete`. `Registry.remove_step(:loyalty)` undoes it.
+
+### Reorder or drop built-in steps
+
+```ruby
+Spree::Checkout::Registry.base_steps.delete('confirm')
+Spree::Checkout::Registry.base_steps['payment'] = ->(cart) { cart.total > 0 }
+Spree::Checkout::Registry.base_step_names = %w[address payment delivery complete]
+```
+
+Removing a step only removes the **label**. Requirements filed under it still gate completion — dropping `payment` does not let an unpaid cart complete.
+
+### Storing the data a requirement checks
+
+`Spree::Cart` has a `metadata` JSON column the Store API accepts on `PATCH /api/v3/store/carts/:id` (merged, not replaced). Carts do **not** include `Spree::HasCustomFields`. Cart-level `metadata` is **not copied** onto the order at completion (line-item metadata is) — read it via `order.cart.metadata`, or copy what you need in a `carts.complete.before_finalize` handler.
+
+## Completion: `Spree::Carts::Complete`
+
+```ruby
+result = Spree.carts_complete_workflow.call(cart: cart)          # optional expected_total:, payment_pending:
+if result.success?
+  order = result.value   # Spree::Order — or Spree::OrderGroup when a multi-seller cart split
+else
+  result.error.to_s      # why: requirements, payment failure, hook rejection, cart_changed...
 end
 ```
 
-So:
-- **All-digital orders** are not skipped via `delivery_required?` — in core that method unconditionally returns `true` (decorate it to change). Instead, digital-only orders (`requires_ship_address?` is `!digital?`) still transition *into* `delivery`, then an `after_transition to: :delivery` hook (`move_to_next_step_if_address_not_required`) immediately calls `next!` to auto-advance past it.
-- **Zero-total orders** (free orders) skip `payment` — `payment_required?` is simply `total.to_f > 0.0`. Note gift cards do NOT zero the total: applying one creates a store-credit payment for the covered amount, so a gift-card-covered order still has `total > 0` and still goes through the `payment` step, where that payment satisfies it.
-- **`confirm`** is opt-in — disabled by default; some payment integrations enable it.
+Three phases with explicit transaction boundaries:
 
-The transition driver is `state_machines-activerecord`. Advance with `order.next!` (raises on failure) or `order.next` (returns false on failure).
+1. **Prepare** (under `cart.with_lock`): replay check → concurrent-completion guard → **in-lock recalculation** (the charged total is computed now, never trusted from earlier requests) → optional `expected_total` drift guard (`cart_changed`) → `Requirements#call(completion: true)` → **`carts.complete.validate` hooks** → stamp `completing_at` → create a `draft` order copying line items, fulfillments + selected rates, TaxLine/Discount/Fee rows, promotions, address snapshots, tax identifier and PO document; re-point payments, payment sessions, reservations and coupon codes.
+2. **Payment** (`external_step`, outside any transaction): process payments if not already covered.
+3. **Finalize**: `carts.complete.before_finalize` hooks → `Spree.order_complete_workflow` (inventory, `draft → placed`, statuses, `order.placed` event) → cart `completed_at` → coupon codes marked used → `tax_provider.commit` → `carts.complete.after_finalize` hooks.
 
-```ruby
-cart.state                # => "cart"
-cart.next!                # => transitions to "address" (if validation passes)
-cart.state                # => "address"
-```
+### Guarantees you can rely on
 
-### `state` vs `status` columns
+- **Idempotent.** A double-click, retry, or a payment webhook racing the customer's return gets the **same order back** — the replay step returns `cart.order`, the unique `spree_orders.cart_id` index catches concurrent winners (`RecordNotUnique` re-enters and replays), and a live `completing_at` claim (5-minute TTL) returns `completion_in_progress` (API: `409`).
+- **Crash recovery.** If the process dies after the order commit, the next attempt (or `Spree::Orders::FinalizeStaleDraftsJob`) re-runs Finalize instead of charging again.
+- **Pre-capture failure rolls back.** A payment failure before any money is captured destroys the draft order, re-points payments/sessions/reservations/coupons back to the cart, and clears `completing_at` — the customer can fix and retry.
+- **Guest token carries over.** The order gets `token: cart.token`, so a guest reads their order with the same `X-Spree-Token`.
+- **Totals are recomputed at the last moment**, so a price or promotion that changed during review can't produce a wrong charge.
 
-Order has BOTH `state` (the checkout state machine — values from the flow above) and `status` (the high-level lifecycle: `Spree::Order::STATUSES = %w[draft placed canceled]`). `payment_state` and `shipment_state` are separate denormalized columns reflecting the rollup of child Payment and Shipment states.
+## Workflow hooks around checkout
 
-## The cart pipeline (recalculate chain)
+Register in the initializer; handlers are class-name strings (reload-safe) with `call(workflow)`. See `spree-workflows` for the full hook catalog.
 
-Whenever a cart changes (item added, removed, address updated, promo applied), Spree runs a **recalculate chain** to keep derived state correct. The chain is `Spree.cart_recalculate_service` (default: `Spree::Cart::Recalculate`):
-
-```
-Spree::Cart::Recalculate
-  ├── Update item totals
-  ├── Recalculate adjustments (taxes, discounts, fees)
-  ├── Apply promotion actions
-  ├── Update shipment costs
-  ├── Recompute order totals
-  └── Persist
-```
-
-The chain is composed of services swappable via `Spree.dependencies`:
-
-```ruby
-# config/initializers/spree.rb
-Spree.cart_add_item_service       = MyApp::Cart::AddItem
-Spree.cart_recalculate_service    = MyApp::Cart::Recalculate
-Spree.cart_remove_item_service    = MyApp::Cart::RemoveItem
-Spree.cart_update_service         = MyApp::Cart::Update
-```
-
-To inject behavior into the cart pipeline, **subclass the service**, override `call`, and register. Don't decorate `Spree::Order` to add a callback — that fires on every save and confuses the state machine.
-
-For the full `Spree.dependencies` system (catalog of swappable services, introspection rake tasks, per-API-surface overrides), see the `spree-dependencies` skill.
+| Key | Kind | Use for |
+|---|---|---|
+| `carts.add_item.validate` | validate | Purchase limits, eligibility — before the line item is built |
+| `carts.upsert_items.validate` | validate | Same rule for quantity edits/removals/bulk (register both keys) |
+| `carts.add_item.after_item_added` | lifecycle (in txn) | Write related records atomically |
+| `carts.complete.validate` | validate | Last-moment veto (fraud score, external credit check) — **before** any money moves |
+| `carts.complete.before_finalize` | lifecycle | Runs **after payment**; copy data onto `workflow.order` |
+| `carts.complete.after_finalize` | lifecycle | After the order is placed |
+| `carts.merge.validate` / `after_merge` | validate / lifecycle | Merge policy |
 
 ```ruby
 module MyApp
-  module Cart
-    class AddItem < Spree::Cart::AddItem
-      def call(order:, variant:, quantity: nil, metadata: {}, public_metadata: {}, private_metadata: {}, options: {})
-        ApplicationRecord.transaction do
-          run :add_to_line_item
-          run :handle_stock_reservations     # keep the parent's stock reservation step
-          run :my_custom_step                # your custom logic
-          run Spree.cart_recalculate_service
-        end
-      end
+  class CreditCheck
+    def call(workflow)
+      cart = workflow.cart
+      return unless cart.company && MyApp::Credit.on_hold?(cart.company) # your own service
 
-      def my_custom_step(order:, line_item:, line_item_created:, options:)
-        # ... your custom logic ...
-        success(order: order, line_item: line_item, line_item_created: line_item_created, options: options)
-      end
+      workflow.reject!('Your account is on credit hold. Contact your account manager.')
     end
   end
 end
+
+Spree.hooks.register('carts.complete.validate', 'MyApp::CreditCheck')
 ```
 
-When you subclass `Spree::Cart::AddItem`, keep all the parent's `run` steps and slot yours in — don't drop `:handle_stock_reservations` or you'll silently break stock reservations for orders in checkout. Every `run` step receives the previous step's `success(...)` hash as keywords and must itself end with `success(...)`/`failure(...)` — that's why `my_custom_step` above takes the keys `handle_stock_reservations` returns and passes them along.
+**Never reject in `before_finalize` or `after_finalize`.** The card has already been charged; rejecting rolls back the database but the charge stands. Veto in `validate`. And prefer a Registry requirement over a `validate` hook for anything the customer can fix — requirements show up on every cart read, a hook only fails at the end.
 
-## Customizing the checkout flow
+Side effects (emails, ERP push) belong in an `order.placed` event subscriber, not a hook (`spree-events-webhooks`).
 
-Add, remove, or reorder steps via `Spree::Order#checkout_flow` (decorator). The state machine is rebuilt when the flow is re-declared.
+## Addresses
+
+`Spree::Purchase::Addresses` (shared by Cart and Order):
+
+- **Dedupe:** `ship_address_attributes=` / `bill_address_attributes=` reuse an identical row from the customer's address book instead of creating duplicates; guests may only edit the row already in the slot.
+- **Promote to defaults:** a signed-in customer's checkout address becomes their default ship/bill address (wallet/quick-checkout addresses excluded).
+- **Ownership guard:** `ship_address_id=` / `bill_address_id=` only accept an address from the customer's own book (or their company's). Anything else silently resolves to `nil` — a guest can never select an address by ID.
+- **`use_shipping: true`** copies the shipping address onto billing (shipping is canonical). `use_billing` is deprecated.
+- Address fields: `first_name`, `last_name`, `address1`, `city`, `postal_code`, `country_code`, `state_code`.
+- Signed-in customers get blank slots auto-filled from saved defaults.
+
+Changing the address re-prices items, rebuilds delivery proposals and re-estimates tax (`cart.recalculate_for_address_change!`).
+
+## Payment sessions
+
+Sessions are **scoped to the cart**: `POST /api/v3/store/carts/:cart_id/payment_sessions` looks the cart up first, so a session id from another cart 404s. Create/update run under the cart row lock; `complete` deliberately doesn't hold the lock across the gateway call — `PaymentSession#settle_payment!` serializes locally, so a confirm racing the gateway webhook records the capture once. Only `complete` resolves an already-completed cart (the webhook may have finished checkout first); creating a session on a completed cart 404s. See `spree-payments`.
+
+## Store API / SDK checkout sequence
+
+```typescript
+import { createClient } from '@spree/sdk'
+const client = createClient({ baseUrl, publishableKey: 'pk_…' })
+
+let cart = await client.carts.create()
+const opts = { spreeToken: cart.token }            // guests: persist cart.id + cart.token
+
+await client.carts.items.create(cart.id, { variant_id: 'variant_…', quantity: 1 }, opts)
+
+cart = await client.carts.update(cart.id, {
+  email: 'jane@example.com',
+  shipping_address: { first_name: 'Jane', last_name: 'Doe', address1: '1 Main St',
+    city: 'Austin', postal_code: '78701', country_code: 'US', state_code: 'TX' },
+  use_shipping: true,
+}, opts)
+
+for (const f of cart.fulfillments) {
+  await client.carts.fulfillments.update(cart.id, f.id,
+    { selected_delivery_rate_id: f.delivery_rates[0].id }, opts)
+}
+
+const session = await client.carts.paymentSessions.create(cart.id, { payment_method_id: 'pm_…' }, opts)
+// confirm with the provider's SDK (Stripe.js etc.), then:
+await client.carts.paymentSessions.complete(cart.id, session.id, {}, opts)
+
+cart = await client.carts.get(cart.id, opts)
+if (cart.requirements.length) { /* route the user by requirements[0].step / code */ }
+
+const result = await client.carts.complete(cart.id, opts)  // Order | OrderGroup — narrow with isOrderGroup from @spree/sdk
+```
+
+Every write returns the whole cart with fresh totals and `requirements` — never make a separate "recalculate" call. Discount codes, gift cards and store credit (`carts.discountCodes`, `carts.giftCards`, `carts.storeCredits`) can be applied any time before completion.
+
+## Login: associate and merge
+
+- `client.carts.associate(cartId, { token: jwt, spreeToken: cart.token })` (`PATCH /carts/:id/associate`) claims a guest cart for the signed-in customer. It requires **both** the JWT and the cart token, only claims guest carts (or the caller's own), fills email and blank addresses from the customer's defaults.
+- The API does **not** auto-merge with the customer's other open carts (`customer.carts.where(store: current_store)` lists them — `Spree::Cart` rows). To fold two carts together, call `Spree.cart_merge_workflow.call(cart: survivor, other_cart: guest_cart, customer:)` (or `survivor.merge!(guest_cart)`) from your own endpoint/subscriber. A currency mismatch fails and keeps both carts. Policy (keep the larger cart, cap quantities) goes in a `carts.merge.validate` hook.
+
+## After completion
+
+- The completed cart is read-only and **404s on every Store API cart endpoint** (the cart scope is `incomplete`). Read the order via `client.orders.get(order.id, {}, { spreeToken })`.
+- `POST /carts/:id/complete` is the exception: re-posting (with the cart id, or the returned order/group id) returns the existing order.
+- Storefronts should drop the stored cart id/token once `complete` succeeds.
+
+## Troubleshooting: "why can't this cart complete?"
+
+1. **Read `cart.requirements`** (`spree console`: `Spree::Checkout::Requirements.new(cart).call(completion: true)`). The completion-only set adds stock/discontinued/quantity-rule/guest-policy failures.
+2. `completion_in_progress` / `409` → another attempt holds `completing_at` (TTL 5 min). Retry; don't clear it by hand while a payment may be in flight.
+3. `payment_required` though the customer paid → a gift card or store credit was removed: **any item change runs `Spree::Carts::Recalculate`, which unapplies gift cards and checkout store credit**. Re-apply after editing items.
+4. `delivery_method_required` with no rates → the address has no matching delivery zone; `cart.warnings` carries `delivery_unavailable` per item.
+5. A custom requirement never clears → your `satisfied:` lambda reads data the storefront never writes (e.g. `custom_fields` on a cart — use `metadata`).
+6. Rejected by a hook → the error message comes from `workflow.reject!` / `workflow.errors` in some `carts.complete.validate` handler; `Spree.hooks.keys` lists registrations.
+
+## Testing
 
 ```ruby
-# backend/app/models/spree/order_decorator.rb — REMOVE the address step (e.g. digital-only store)
-module Spree::OrderDecorator
-  def self.prepended(base)
-    base.checkout_flow do
-      go_to_state :delivery, if: ->(order) { order.delivery_required? }
-      go_to_state :payment,  if: ->(order) { order.payment? || order.payment_required? }
-      go_to_state :complete
-    end
-  end
+cart = create(:cart_ready_to_complete)
+result = Spree.carts_complete_workflow.call(cart: cart)
+expect(result).to be_success
+expect(result.value).to be_placed
+expect(Spree.carts_complete_workflow.call(cart: cart.reload).value).to eq(result.value) # replay
 
-  Spree::Order.prepend self
-end
+# Registry state is global — reset in an after hook
+after { Spree::Checkout::Registry.reset! }
 ```
 
-To **insert** a new step (e.g. a "review" step between `payment` and `confirm`):
+Factories: `:cart`, `:cart_with_line_items`, `:cart_ready_for_delivery`, `:cart_ready_to_complete`. See `spree-testing`.
 
-```ruby
-base.insert_checkout_step :review, after: :payment
-```
+## Common mistakes
 
-To **remove** a single step there's also `base.remove_checkout_step :address` (one step per call) — no need to re-declare the whole flow unless you're redefining it entirely.
-
-Common gotchas:
-
-- **Existing in-progress orders have a `state` that may not exist in your new flow.** Add a backfill rake task that resets them to `cart` or migrates to the new state.
-- **State machine guards run on every transition** — `delivery_required?`, `payment_required?`, etc. Decorating these to lie about the cart's state breaks the flow.
-
-## Address handling
-
-`Spree::Address` is used for both billing and shipping. Order has `bill_address_id` and `ship_address_id`. Both can point at the same address (one-form checkout); the validator allows nil for both during the `cart` state.
-
-Country/State are normalized to `Spree::Country` and `Spree::State` records (not free text). Form input from the storefront is validated against the country's `Spree::State` set. State validation is gated by `Spree::Config[:address_requires_state]` (marked deprecated in 5.5, but still honored) and the country's `states_required` flag — countries with `states_required: false` skip it entirely. A country with `states_required: true` but no seeded `Spree::State` records still requires a free-text `state_name`.
-
-### Guest checkout vs logged-in
-
-`Order.user_id` is nullable. Guest orders have `email` set instead. After completion, the guest's order token remains the credential for viewing the order — `GET /api/v3/store/orders/:id` with the `X-Spree-Token` header. If the guest opts into account creation at checkout, `Spree::Orders::CreateUserAccount` links the order to a new user (or an existing user with the same email) at completion. There is no number+email claim flow, and registering later does not auto-link past guest orders.
-
-For the storefront, the guest cart is tracked via a **cart token** (`Order.token` — a random per-cart string). The token is in a cookie or returned to the API client. JWT auth replaces token auth once the customer logs in.
-
-## Payment sessions (5.4+)
-
-The classic Spree payment flow created a Payment record + processed it inline. The 5.4+ refactor introduced **PaymentSession** — an intermediate object that handles redirect-based provider flows (Stripe Checkout, Adyen drop-in, PayPal Smart Buttons).
-
-```
-Order (cart)
-  ↓
-PaymentSession  ← provider-specific session data
-  ↓             (created by spree_stripe / spree_adyen / spree_paypal_checkout)
-Customer redirects to provider
-  ↓
-Customer returns OR provider webhook fires
-  ↓
-PaymentSession.complete!
-  ↓
-Payment record created
-  ↓
-Order transitions to `confirm` or `complete`
-```
-
-Events: `payment_session.processing`, `payment_session.completed`, `payment_session.failed`, `payment_session.canceled`, `payment_session.expired`. See the `spree-events-webhooks` skill.
-
-In your subscriber, the `payment_session.completed` event payload includes the `order_id` — you can hook in custom logic after the customer returns from the provider but before the order finalizes.
-
-## The complete transition
-
-When the order transitions to `complete`:
-
-1. Inventory is allocated via shipment finalization (`shipment.finalize!`); stock reservations from checkout are released (deleted) by `Spree::StockReservations::Release` once the order completes.
-2. `Spree::OrderUpdater` finalizes totals.
-3. `order.completed_at` is set.
-4. `order.publish_event('order.completed', payload)` fires — subscribers run, webhooks deliver.
-5. For guests, the order token remains the credential for viewing the completed order — the Store API scopes guest order lookup by `token` (`X-Spree-Token` header). The order's human-facing `number` (e.g. `R123456789`, assigned at creation) is for display and support, not API lookup.
-
-After complete, the order should be immutable from the customer's side. Admins can still adjust (refunds, return authorizations, edits) but those go through dedicated controllers, not the cart pipeline.
-
-## Common checkout problems
-
-### "Order stuck in checkout"
-
-- Missing line items: `order.line_items.count == 0`. `ensure_line_items_present` runs on every transition out of `cart` — this is the only thing that blocks leaving `cart` itself.
-- Missing address: `order.bill_address` or `order.ship_address` is nil. This doesn't block leaving `cart` — it surfaces at `address → delivery` (no ship address means no proposed shipments, so `ensure_available_shipping_rates` fails). Run `order.next!` and check the validation errors.
-- A variant became discontinued or out of stock: blocks the transition to `complete` (and `resumed`), and the order gets bounced back to the start of checkout via `restart_checkout_flow`. Check `order.line_items.map(&:variant).map(&:purchasable?)`.
-
-### "Customer redirected to Stripe but never returned"
-
-- PaymentSession is still in `processing` state. Either Stripe's webhook never fired (check `spree_stripe`'s endpoint config) or the customer abandoned. The session has a TTL (`expires_at`) — core filters timed-out sessions via the `not_expired`/`active` scopes, but the `payment_session.expired` event only fires when something explicitly triggers the `expire` transition (typically the gateway extension reacting to a provider webhook).
-- The redirect-back URL is wrong. Check `spree_stripe`'s configured `return_url`.
-
-### "Cart total doesn't match what's displayed"
-
-- The cart pipeline didn't run after the last change. Trigger `Spree::Cart::Recalculate.call(order: order, line_item: order.line_items.last)` manually and inspect.
-- A custom adjustment isn't being applied. Check `order.adjustments.eligible.sum(:amount)`.
-- Promotions are eligible but not applied. See the `spree-promotions` skill — common cause is promotion `usage_limit` exhausted.
-
-### "Skip the payment step for a free order"
-
-`order.payment_required?` returns false when the order total is zero (`total.to_f > 0.0` is the implementation). If your custom flow needs to skip even more aggressively, override `payment_required?`:
-
-```ruby
-module Spree::OrderDecorator
-  def payment_required?
-    return false if my_special_condition?
-    super
-  end
-
-  Spree::Order.prepend self
-end
-```
+- Looking for `order.state`, `next!`, `checkout_flow` — gone. Steps are derived; requirements are the gate.
+- Adding a model validation on `Spree::Cart` for a checkout field — that blocks every partial write. Use a Registry requirement.
+- Rejecting in `before_finalize` — money already moved.
+- Reading `line_item.order` in code that runs during checkout — use `owner`.
+- Hardcoding the step list in the storefront — render from `completed_steps` / `current_step` and route by `requirements[].code`.
+- Writing to a completed cart (raises `ActiveRecord::ReadOnlyRecord`) — edit the order through the admin services instead.
 
 ## Where to read further
 
-- **Core concepts:** `node_modules/@spree/docs/dist/developer/core-concepts/orders.md`, `payments.md`
-- **Checkout customization:** `node_modules/@spree/docs/dist/developer/customization/checkout.md`
-- **Order source:** `Spree::Order` and `Spree::Order::Checkout` in the installed `spree_core` gem — the state machine wiring.
-- **Cart services:** `Spree::Cart::AddItem`, `Spree::Cart::Recalculate`, etc. in `spree_core/app/services/spree/cart/`.
+- `node_modules/@spree/docs/dist/developer/core-concepts/carts.md` and `orders.md`
+- `node_modules/@spree/docs/dist/developer/customization/checkout.md` — Registry
+- `node_modules/@spree/docs/dist/developer/customization/workflows.md` — hooks
+- `node_modules/@spree/docs/dist/developer/sdk/store/cart-checkout.md`
+- Related skills: `spree-order-totals`, `spree-taxes`, `spree-payments`, `spree-promotions`, `spree-fulfillment`, `spree-workflows`, `spree-b2b`
+- Source: `spree/core/app/workflows/spree/carts/complete.rb`, `spree/core/lib/spree/checkout/`

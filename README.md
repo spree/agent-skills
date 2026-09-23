@@ -30,36 +30,50 @@ npx skills update
 
 ## What ships
 
-### 26 skills
+### 38 skills
+
+Targets **Spree 6.x** (Rails 8.1). Working on Spree 5.x? Install the [`v0.3.0`](https://github.com/spree/agent-skills/tree/v0.3.0) release instead.
 
 | Skill | When it activates |
 |---|---|
-| `spree-project` | General Spree project context — conventions, customization patterns, common commands. |
-| `spree-customization` | Decision tree for "where does my customization belong" — routes to the right specific skill. Use FIRST when the pattern isn't obvious. |
+| `spree-project` | General Spree project context — layout (`server/`, `apps/dashboard`), conventions, CLI vs classic Rails flavor. |
+| `spree-customization` | Decision tree for "where does my customization belong" — hook vs subscriber vs provider vs decorator. Use FIRST when the pattern isn't obvious. |
+| `spree-workflows` | `Spree::Workflow` and `Spree.hooks` — validate, lifecycle and context hooks; `has_status`. |
 | `spree-resource` | Adding a new model + API endpoint via the `spree:api_resource` generator, or a model-only resource via `spree:model`. |
-| `spree-decorators` | Extending existing Spree models/controllers via decorators (`Module#prepend`). |
-| `spree-dependencies` | Swapping core Spree services via `Spree.dependencies` — cart, checkout, ability, serializers. Includes the introspection rake tasks. |
-| `spree-api-v3` | Spree REST API v3 conventions — Store vs Admin surfaces, auth (pk_/sk_/JWT), scopes, prefixed IDs, envelope, Ransack filters. |
-| `spree-legacy-api-v2` | Maintaining or migrating away from the legacy API v2 (JSON:API style). |
-| `spree-typescript-sdk` | `@spree/sdk` + `@spree/admin-sdk` — auth modes, types, Zod, webhooks, retry config, MSW, extension patterns. |
-| `spree-cli` | `spree api` — call/inspect the Admin API from the terminal (gh api-style verbs, offline endpoint/schema discovery, credential layers). Especially for debugging. |
-| `spree-upgrade` | Upgrading Spree to a new version. |
-| `spree-data-model` | Domain model questions — Orders, LineItems, Variants, Stores, Channels, Markets. |
-| `spree-events-webhooks` | Subscribers + outbound webhooks (HMAC, retry, auto-disable). |
-| `spree-extensions` | Installing third-party gems (Stripe, Adyen, etc.) or building your own. |
-| `spree-catalog` | Products, Variants, Options, Categories, search, images. |
-| `spree-checkout` | Cart pipeline, order state machine, payment sessions, custom checkout flow. |
-| `spree-payments` | Payment methods, gateways, refunds, gift cards, store credits. |
+| `spree-decorators` | Extending existing Spree classes via decorators (`Module#prepend`) — the last resort. |
+| `spree-dependencies` | Swapping core workflows, services and serializers via `Spree.dependencies`. |
+| `spree-extensions` | Installing official gems or building your own extension (engine + dashboard plugin). |
+| `spree-providers` | Plugging in tax, delivery rate, fulfillment, payment, search, payout, digital asset and auth providers. |
+| `spree-api-v3` | REST API v3 — Store, Admin and Seller surfaces, auth, scopes, prefixed IDs, envelopes, errors. |
+| `spree-typescript-sdk` | `@spree/sdk`, `@spree/admin-sdk`, `@spree/seller-sdk` — auth, types, webhooks, extension patterns. |
+| `spree-cli` | `spree api` — call/inspect the Admin API from the terminal. Especially for debugging. |
+| `spree-auth-permissions` | Staff roles as data, permission keys, API key scopes, SSO and custom authentication. |
+| `spree-data-model` | Domain model — stores, channels, markets, carts vs orders, customers, companies, prefixed IDs. |
+| `spree-catalog` | Products, variants, options, product types, categories, collections, media, custom fields, search. |
+| `spree-pricing` | Prices per currency, price lists, catalogs, volume pricing, EU Omnibus price history. |
+| `spree-inventory` | Stock levels, reservations, backorders, purchase orders, suppliers, transfers. |
+| `spree-checkout` | Cart → order completion, the requirements feed, `Spree::Checkout::Registry`, checkout hooks. |
+| `spree-order-totals` | Tax lines, discounts and fees; totals recalculation; money freeze after placement. |
+| `spree-taxes` | Tax categories and rates, per-market tax providers, exemptions. |
+| `spree-payments` | Payment methods, sessions, capture, refunds, gift cards, store credits. |
 | `spree-promotions` | Promotion rules, actions, calculators, coupon codes. |
-| `spree-pricing` | Variant prices, multi-currency, price lists, EU Omnibus / PriceHistory. |
-| `spree-shipping-fulfillment` | Shipments, methods, rates, stock locations, returns. |
-| `spree-admin` | Customizing the Spree admin (`spree_admin` gem). |
+| `spree-fulfillment` | Fulfillments, delivery methods, zones and profiles, rates, order routing, stock splitters. |
+| `spree-returns` | Returns, exchanges and claims — workflows, eligibility policy, refunds. |
+| `spree-marketplace` | Multi-vendor marketplaces — sellers, onboarding, commissions, payouts, Seller API. |
+| `spree-b2b` | B2B / wholesale — companies, catalogs, customer groups, gated channels, PO numbers, freight. |
+| `spree-multi-tenant` | Multi-tenant SaaS platform on Spree Enterprise. |
+| `spree-reporting` | Reporting metrics and dimensions, saved reports, imports and exports. |
+| `spree-dashboard` | Customizing the React admin dashboard — navigation, routes, slots, tables, forms, theming. |
+| `spree-dashboard-plugins` | Scaffolding, packaging and publishing dashboard plugins. |
 | `spree-storefront` | The Next.js storefront and `@spree/sdk`. |
+| `spree-events-webhooks` | Events, subscribers and outbound webhooks (HMAC signing, delivery, auto-disable). |
 | `spree-i18n` | UI translations (`Spree.t` + YAML) and data translations (Mobility). |
-| `spree-testing` | RSpec + Factory Bot + Capybara, `spree_dev_tools`, the `API v3 Store` shared context. |
-| `spree-security` | Rails security + Spree-specific (CanCanCan scopes, encrypted preferences, webhook HMAC, PCI scope reduction). |
-| `spree-performance` | Cart pipeline, catalog N+1s, search latency, image processing, Sidekiq queue tuning. |
-| `spree-deployment` | Deploying to Heroku, Render, K8s, Docker — env vars, release commands, S3, Sidekiq. |
+| `spree-testing` | RSpec + Factory Bot, `spree_dev_tools`, the API v3 shared contexts, dashboard tests. |
+| `spree-security` | Rails security + Spree-specific (secrets, encryption, webhook HMAC, data privacy, PCI). |
+| `spree-performance` | Recalculation, catalog N+1s, search latency, job queues, observability. |
+| `spree-deployment` | Deploying to Docker, Render, AWS — env vars, Solid Queue, dashboard build, S3/CDN. |
+| `spree-upgrade` | Upgrading Spree — `spree upgrade`, manifests, data steps, production release. |
+| `spree-upgrade-5-to-6` | The Spree 5.6 → 6.0 upgrade — preconditions, backfills, grep recipes for breaking changes. |
 
 ### `spree-expert` subagent
 

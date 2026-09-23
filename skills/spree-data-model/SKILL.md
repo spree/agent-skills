@@ -1,154 +1,150 @@
 ---
 name: spree-data-model
-description: Use when the user is asking how Spree's domain models relate — Orders, LineItems, Variants, Products, Stores, Channels, Markets, Payments, Shipments, Customers, Adjustments. Architecture and relationships only. Common phrasings include "how does X connect to Y", "what's the relationship between", "where does Spree store X", "how do I query orders across stores", "how do channels work", "what's the difference between Cart and Order", "Store vs Channel vs Market". For adding new models / new API resources, use the `spree-resource` skill. For field-level detail, see `docs/developer/core-concepts/` in the installed `@spree/docs` package.
+description: Use when the user asks how Spree 6's domain models relate or where something is stored — Store/Channel/Market/Catalog, Product/Variant/Price/Category/Collection, Customer/Company/CustomerGroup, Cart vs Order, LineItem, TaxLine/Discount/Fee, Fulfillment/DeliveryMethod/StockLevel, Return/Exchange/Claim, Payment/PaymentSession/Refund/StoreCredit/GiftCard, Seller/OrderGroup, prefixed ID prefixes and document numbers. Phrasings: "how does X connect to Y", "what's the difference between Cart and Order", "Store vs Channel vs Market", "what statuses can a fulfillment have", "what prefix is `ful_`", "where are taxes stored", "how do I query orders". Architecture and relationships — for adding new models use spree-resource; for behavior use the domain skill (spree-checkout, spree-fulfillment, …).
 ---
 
-# Spree Data Model
+# Spree Data Model (Spree 6)
 
-A relationship map for the most-asked-about Spree models. Field-level documentation lives in the installed `@spree/docs` package at `node_modules/@spree/docs/dist/developer/core-concepts/`.
+A relationship map of the models you'll touch most. Field-level detail lives in `node_modules/@spree/docs/dist/developer/core-concepts/*.md`; when in doubt, read `server/`'s installed gem source (`bundle exec gem contents spree_core`, or `spree exec bundle show spree_core`).
 
-## The catalog → cart pipeline
+## The big picture
 
-```
-Product → Variant → LineItem → Order
-```
-
-- **Product** is the brand-level entity (name, slug, description, category).
-- **Variant** is the sellable SKU. Every Product has at least one Variant. Variants carry SKU, prices, dimensions, and link to inventory.
-- **LineItem** links a Variant to an Order with `quantity` and price frozen at add-time.
-- **Order** is the customer's transaction — the cart-in-progress and, after checkout, the completed transaction (same record, different `state`).
-
-Variants relate to stock via `StockItem` (one per Variant per StockLocation) and the `StockMovement` history.
-
-### Master vs default variant
-
-A Product has a `master` variant (legacy concept, `is_master: true`) and a computed `default_variant` method: when `Spree::Config[:track_inventory_levels]` is on, the first purchasable variant; otherwise the first non-master variant by `position`; master is only the fallback when the product has no other variants. `product.default_variant_id` just returns that computed variant's id. Neither is a database column in 5.5 — don't query or migrate against `default_variant_id` (a `default_variant_id` FK on `spree_products` is planned for 6.0, implementation not started; see `docs/plans/6.0-remove-master-variant.md`). Use `product.variants` for the non-master sellable variants and `product.variants_including_master` only when you genuinely need the master row included.
-
-## The multi-channel / multi-store axis
-
-```
-Store → Channel → ProductPublication → Product
-```
-
-Available since Spree 5.5.
-
-- **Store** is the top-level brand (one organization = one Store, typically).
-- **Channel** is a selling surface within a Store: the online storefront, in-person POS, marketplace integrations (Amazon, eBay), B2B wholesale, mobile apps. Every Store has at least a default Channel named "Online Store".
-- **ProductPublication** is the join: which Products are visible on which Channel, with optional `published_at` / `unpublished_at` windows for scheduling.
-- **Order** has `channel_id` so revenue can be attributed per channel.
-
-The Store API resolves a channel per request from the `X-Spree-Channel` header (matched against `channels.code` or a `ch_…` prefixed ID); without it the store's default channel is used. The Admin API does not consume `X-Spree-Channel` — admin queries return data across all channels for the current store.
-
-## Markets (regional config)
-
-```
-Market has_many :countries
-Market  columns:  currency (string), default_locale (string)
-Order belongs_to :market
+```mermaid
+erDiagram
+    Store ||--o{ Channel : "sells through"
+    Store ||--o{ Market : "sells into"
+    Store ||--o{ Catalog : "audience ranges"
+    Store ||--o{ Product : "owns"
+    Store ||--o{ Cart : "has"
+    Store ||--o{ Order : "records"
+    Product ||--o{ Variant : "has (default_variant = face)"
+    Variant ||--o{ Price : "per currency / price list"
+    Variant ||--o{ StockLevel : "per location"
+    StockLevel }o--|| StockLocation : "at"
+    Cart ||--o{ LineItem : "while shopping"
+    Cart ||--o| Order : "completes into"
+    Order ||--o{ LineItem : "copied at completion"
+    Order ||--o{ Fulfillment : "ships as"
+    Order ||--o{ Payment : "paid by"
+    Order ||--o{ TaxLine : "taxed by"
+    Order ||--o{ Discount : "reduced by"
+    Order ||--o{ Fee : "surcharged by"
+    Order ||--o{ Return : "returns"
+    Order }o--o| Customer : "placed by"
+    Order }o--o| Company : "bought for"
+    Fulfillment }o--|| DeliveryMethod : "via"
+    Fulfillment }o--|| StockLocation : "from"
+    Payment }o--|| PaymentMethod : "via"
 ```
 
-A Market is a regional configuration: its set of countries, currency, and default locale. Stores typically get a default Market created automatically (when a default country is known at creation), but markets are optional — check `store.has_markets?`; currency and locale fall back to store-level defaults when no market exists. Orders are placed in a Market — that's what controls the currency the customer sees and what tax rules apply.
+All models are `Spree::*`, inherit `Spree.base_class`, carry a prefixed ID, and are store-scoped unless noted. **No model has a state machine** — lifecycle fields are string `status` columns (`has_status`) moved by workflows.
 
-For full Market documentation see `node_modules/@spree/docs/dist/developer/core-concepts/markets.md`.
+## 1. Commerce axis — Store, Channel, Market, Catalog
 
-## Cart vs Order
+| Model | What it is | Key points |
+|---|---|---|
+| `Store` (`store_`) | The tenant boundary — its own catalog, orders, settings | Query through it: `store.products`, `store.orders`. `Spree::Store.default` may be nil; `Spree::Current.store` is the request's store |
+| `Channel` (`ch_`) | *Where* an order comes from — online, POS, wholesale portal, app | One default per store ("Online Store"). Resolved per request from `X-Spree-Channel` (code or `ch_` id). `ProductPublication` (`pp_`) decides which products a channel lists; orders carry `channel_id` |
+| `Market` (`mkt_`) | *Region* a store sells into — countries + currency + locales + tax-inclusive flag + tax provider | Resolved from the customer's country; falls back to the default market |
+| `Catalog` (`cat_`) | *What an audience sees and pays* | `CatalogProduct` = assortment (empty ⇒ pricing overlay only; non-empty ⇒ restricted range), optional `PriceList`, `CatalogAssignment` to a `CustomerGroup` or `Company`, plus quantity rules and order minimums. A channel may have a `default_catalog` |
 
-In Spree, `Spree::Order` is both the in-progress cart and the completed transaction. The `state` column tracks which phase: `cart`, `address`, `delivery`, `payment`, `confirm`, `complete`. Filter on state to distinguish:
+## 2. Catalog — products and what hangs off them
+
+| Model | Notes |
+|---|---|
+| `Product` (`prod_`) | `status`: `draft` / `active` / `archived` (+ `proposed` / `rejected` for marketplace review). Belongs to `ProductType`, `DeliveryProfile`, optional `Seller`, `TaxCategory` |
+| `Variant` (`variant_`) | The buyable SKU. **No master variant** — every product has ≥1 variant and a real FK `product.default_variant` (`default_variant_id`), the variant that fronts price/SKU/weight for single-variant products |
+| `Price` (`price_`) | `amount`, `compare_at_amount`, `currency`, optional `price_list_id`. Read/write via `variant.price_in('EUR')`, `variant.amount_in('EUR')`, `variant.set_price('EUR', 19.99, 24.99)` — there is no `variant.price` |
+| `PriceList` (`pl_`) + `PriceRule` | Conditional price overrides; `status` `draft` / `active` / `inactive` / `scheduled`. See `spree-pricing` |
+| `Category` (`ctg_`) | Store-owned **tree** (nested set) for navigation; products join via `ProductCategory` |
+| `Collection` (`coll_`) | **Flat**, manual or rule-based (`CollectionRule`) product grouping for merchandising |
+| `OptionType` (`opt_`) / `OptionValue` (`optval_`) | Size/Color; display text is `label` (not `presentation`); `option_type.color_swatch?` |
+| `ProductType` (`pt_`) | Template: which option types, categories, custom field definitions and delivery profile a kind of product uses |
+| `Media` (`media_`) | Images/videos, polymorphic `viewable`; `product.primary_media`; variants link through `VariantMedia` |
+| `CustomFieldDefinition` (`cfdef_`) / `CustomField` (`cf_`) | Merchant-defined typed attributes on products, customers, orders…; store-scoped definitions; `storefront_visible`; `record.set_custom_field('custom.material', 'Cotton')` / `get_custom_field('custom.material')` |
+
+Integration data that nobody edits goes in `metadata` (JSON, every major model), not custom fields.
+
+## 3. Buyer — Customer, Company, CustomerGroup, Address
+
+- **Customer** (`Spree.customer_class`, default `Spree::Customer`, `cust_`) — the shopper account. **Customers are global** (not store-owned); store-specific standing (groups, companies) is evaluated per store. Has `orders`, `carts` (open `Spree::Cart`s), `addresses`, `store_credits`, `gift_cards`, `wishlists`, `customer_groups`, `companies` (through `CompanyMembership`). Staff are a separate class: `Spree.admin_user_class` (`adm_`).
+- **Company** (`comp_`) — a B2B buyer organization, store-scoped, a **tree** up to five levels (`parent` / `children`); nodes are `kind` `company` (legal entity, may hold `TaxIdentifier`s) or `division`. Members via `CompanyMembership` (`cmem_`) with company roles; invites via `CompanyInvitation`. Carts/orders carry `company_id`. See `spree-b2b`.
+- **CustomerGroup** (`cg_`) — store-scoped segment used by catalogs, promotions and price rules.
+- **Address** (`addr_`) — polymorphic `owner` (customer or company address book). Fields `first_name`, `last_name`, `address1/2`, `city`, `postal_code`, `country_code`, `state_code`, `phone`, `company`.
+
+## 4. Purchase — Cart → Order
+
+| | `Spree::Cart` (`cart_`) | `Spree::Order` (`or_`) |
+|---|---|---|
+| Purpose | Mutable checkout state | Immutable financial record |
+| Lifecycle field | none — only `completed_at` (set when completed) | `status`: `draft` → `placed` / `canceled` (plus derived `payment_status`, `fulfillment_status`) |
+| Changes via | `Spree::Carts::*` workflows (AddItem, UpsertItems, Recalculate, Complete, Merge) | `Spree::Orders::*` workflows (Cancel, admin edit twins); statuses only via `Spree::Orders::UpdateStatuses` |
+| Store API | `/api/v3/store/carts` | `/api/v3/store/orders` (read), Admin API for management |
+
+- `Spree::Carts::Complete` is the single hard gate: it re-prices, checks `Spree::Checkout::Requirements`, processes payment, and copies the cart into a new Order (`order.cart_id`; `cart.order`). The cart is kept with `completed_at` set. Checkout "steps" are advisory, derived from outstanding requirements.
+- Shared behavior lives in **`Spree::Purchase::*` concerns** included by both (`Addresses`, `Currency`, `Market`, `Channel`, `Company`, `Taxation`, `Totals`, `PaymentProcessing`, `StoreCredits`, `GiftCards`, `Validations`, `Lifecycle`, `DigitalItems`, `QuantityRules`, `PurchaseOrder`, `Freight`, …; `CheckoutSteps` is cart-only). Code meant for both takes "a purchase", not an order.
+- **Dual owner FKs:** `LineItem`, `Fulfillment`, `Payment`, `PaymentSession`, `TaxLine`, `Discount`, `Fee`, `StockReservation` carry both `cart_id` and `order_id` (exactly one set). Always read **`record.owner`** — never assume `.order`.
+- **LineItem** (`li_`) — variant, quantity, unit price captured into the row (plus `price_list_id`, `seller_id`); has its own tax lines, discounts, fees, fulfillment items.
+- `payment_status`: `none`, `authorized`, `partially_paid`, `paid`, `partially_refunded`, `refunded`, `overcharged`, `voided`. `fulfillment_status`: `unfulfilled`, `backorder`, `partial`, `fulfilled`, `delivered`, `canceled`. Never write these yourself.
+- Querying: `store.orders.placed_orders`, `.canceled_orders`, `.drafts`; API `q[status_eq]=placed`. Carts: `store.carts.incomplete`.
+
+## 5. Money rows — TaxLine, Discount, Fee
+
+There is no generic adjustment table. Three typed rows (shared concern `Spree::TypedAdjustmentLine`: `amount`, `label`, `metadata`, cart/order owner):
+
+| Row | Attaches to | Notes |
+|---|---|---|
+| `TaxLine` (`tl_`) | line item, fulfillment or fee | `included` (in-price) vs additional; keeps rate/label snapshot; `tax_rate` optional (provider-computed tax) |
+| `Discount` (`disc_`) | line item or fulfillment | `promotion` / `promotion_action` snapshot; applied promotions tracked by `OrderPromotion` |
+| `Fee` (`fee_`) | line item, fulfillment, or the purchase itself | surcharges, duties, handling |
+
+Totals on the purchase: `item_total`, `discount_total`, `delivery_total`, `fee_total`, `tax_total` (= `included_tax_total` + `additional_tax_total`), `total`, `amount_due`. **`Spree::Carts::RecalculateTotals`** is the one seam that regenerates rows on a cart. **Placed orders are money-frozen**: `Spree::Orders::RecalculateTotals` re-sums existing rows and never re-applies today's promotions or rates. See `spree-order-totals`, `spree-taxes`.
+
+## 6. Fulfillment, inventory and after-sales
+
+- **Fulfillment** (`ful_`) — one parcel from one `StockLocation` via one `DeliveryMethod`; `status` `unfulfilled` → `fulfilled` → `delivered`, or `canceled` (final — no resume). Number derived from the order (`R1001-F1`). Items are `FulfillmentItem` (`fi_`, `on_hand` / `backordered` / `shipped` / `returned`). Candidate rates are `DeliveryRate` (`dr_`). Carrier journeys are `Delivery` (`dlv_`) rows; labels are `ShippingLabel` (`lbl_`).
+- **Delivery setup:** `DeliveryProfile` (`fp_`, how a product ships; products reference one) → `DeliveryOriginGroup` (`og_`) → `DeliveryZone` (`dz_`) + `DeliveryMethod` (`dm_`, with a calculator, rules and a fulfillment provider type — shipping, digital, pickup).
+- **Inventory:** `StockLocation` (`sloc_`) ↔ `StockLevel` (`sl_`, one per variant per location: `count_on_hand`, `backorderable`, reserved/allocated/incoming counts) → `StockMovement` (`sm_`); checkout holds via `StockReservation` (`res_`); `StockTransfer` (`st_`) and `PurchaseOrder` (`po_`) move stock in. See `spree-inventory`, `spree-fulfillment`.
+- **After-sales:** `Return` (`ret_`, `requested` → `approved` → `received` → `refunded` | `canceled`) with `ReturnLineItem`; `Exchange` (`exch_`, `requested` → `approved` → `received` → `fulfilled` | `canceled`); `Claim` (`claim_`, `open` → `approved` → `resolved` | `denied` / `canceled`). Each transition is a workflow (`Spree::Returns::*`, …). See `spree-returns`.
+
+## 7. Payments
+
+- **PaymentMethod** (`pm_`) — store-scoped gateway config (STI subclasses, preferences for credentials).
+- **PaymentSession** (`ps_`) — provider-side session (Stripe PaymentIntent, Adyen session…) for session-based methods; `status` `pending` / `processing` / `completed` / `failed` / `canceled` / `expired`. `PaymentSetupSession` (`pss_`) saves a method for later.
+- **Payment** (`py_`) — `status` `checkout` / `processing` / `pending` (authorized) / `completed` (captured) / `failed` / `void` / `invalid`; polymorphic `source` (`CreditCard` `card_`, `PaymentSource` `psrc_`, `StoreCredit`, …). Number derived from the order (`R1001-P1`).
+- **Refund** (`re_`) — against a payment, with a `RefundReason`. **StoreCredit** (`credit_`) — customer balance, used as a payment source. **GiftCard** (`gc_`) — `active` / `partially_redeemed` / `redeemed` / `canceled`; redeeming issues store credit. See `spree-payments`.
+
+## 8. Marketplace (brief)
+
+`Seller` (`sel_`, `pending` … `approved` / `rejected` / `suspended`) owns products, stock locations and delivery methods. A mixed cart completes into **one Order per seller** grouped by an `OrderGroup` (`ogrp_`, which owns the shared payment, addresses and email; its status is derived from the children). Commission lines, `SellerTransfer` and `SellerPayout` track money owed. See `spree-marketplace`.
+
+## 9. Identifiers — prefixed IDs and document numbers
+
+Every API-facing model has a Stripe-style prefixed ID (`Spree::PrefixedId`, `has_prefix_id :prod`): `prefix_<sqids(id)>`. The integer PK stays internal.
 
 ```ruby
-Spree::Order.where(state: 'cart')      # in-progress carts
-Spree::Order.where(state: 'complete')  # finalized orders
-Spree::Order.complete                  # named scope — NOT equivalent: defined as where.not(completed_at: nil), so it matches any order that ever completed checkout, including ones later canceled or returned
+product.prefixed_id                       # "prod_86Rf07xd4z"
+Spree::Product.find_by_prefix_id!(id)     # raises RecordNotFound; find_by_prefix_id returns nil
+Spree::Product.decode_prefixed_id(id)     # → integer PK, or nil if the ID isn't a prod_ ID
 ```
 
-`Order#token` (`has_secure_token :token, length: 35`) identifies an anonymous cart across requests. Logged-in carts are owned via the `user_id` FK.
+Common prefixes: `prod_` product, `variant_` variant, `price_`, `ctg_` category, `coll_` collection, `cart_`, `or_` order, `li_` line item, `py_` payment, `ps_` payment session, `re_` refund, `ful_` fulfillment, `dm_` delivery method, `sl_` stock level, `sloc_` stock location, `cust_` customer, `adm_` admin user, `addr_` address, `comp_` company, `mkt_` market, `ch_` channel, `sel_` seller, `media_`, `tl_` / `disc_` / `fee_` money rows, `ret_` / `exch_` / `claim_`. **Full table (~135 models): [references/prefixed-ids.md](references/prefixed-ids.md).**
 
-## Checkout-side models
+Your own models get one the same way: `has_prefix_id :brand` (the `spree:api_resource` generator adds it).
 
-```
-Order → Payment → PaymentMethod
-Order → Shipment → ShippingRate → ShippingMethod
-Order → Address (bill_address, ship_address)
-```
+**Document numbers** are separate, human-readable references: orders `R1001` (sequential by default; merchant sets format/prefix/suffix/start in Settings → Store → Order numbers), returns `RET…`, exchanges `EX…`, claims `CLM…`, imports `IM…`, exports `EF…`, purchase orders `PO…`. Fulfillments and payments derive from their order (`R1001-F1`, `R1001-P1`). Custom format: `Spree.number_generators[:order] = 'MyApp::BranchOrderNumbers'` (subclass `Spree::NumberGenerators::Base#generate(record)`; use `Spree::NumberSequence.next_value` for counters). Your own model: `has_spree_number prefix: 'CN'` + unique `number` column.
 
-- **Payment** has its own state machine (`checkout → processing → pending → completed`, plus `failed`, `void`, and `invalid`). Column is `state`.
-- **Shipment** has its own state machine (`pending → ready → shipped` with `canceled`). Column is `state`.
-- **ShippingRate** is a per-Shipment offer (e.g. UPS Ground $5.99, USPS Priority $8.99). The customer picks one.
+## Gotchas
 
-## Customer / User
+- `Spree::Order` in a 5.x mental model meant "cart". In Spree 6, cart-phase code uses `Spree::Cart`; an Order only exists once placed (or as an admin draft).
+- `customer.carts` returns the customer's **open `Spree::Cart` records** across all stores — scope it: `customer.carts.where(store: store)` (or `store.carts.incomplete.where(customer: customer)`). An incomplete `Spree::Order` is an admin draft, not a cart (`customer.orders.drafts`). `last_incomplete_spree_order` is deprecated (it returns drafts) and removed in 6.1.
+- `Spree::Taxonomy` and `Spree::Taxon` still exist as deprecated, data-only upgrade artifacts — use `Category` / `Collection`.
+- Order's `status` uses a plain `STATUSES` constant, not `has_status`, so `Spree::Order.add_status` isn't available.
+- Money in the API is a string (`"135.60"`) with a `display_*` twin.
 
-```
-Spree.user_class (typically Spree::User)
-  ↓
-Address (many, via spree_addresses)
-CreditCard (many)
-GiftCard (many)
-StoreCredit (many)
-```
+## Where to read further
 
-Use `Spree.user_class` and `Spree.admin_user_class` to reference user models — never `Spree::User` directly. Apps can swap in their own user model via configuration.
-
-## Adjustments (polymorphic)
-
-```
-Adjustable (Order, LineItem, Shipment) ← Adjustment
-```
-
-`Adjustment` is polymorphic — it attaches to any Order, LineItem, or Shipment via `adjustable_type` + `adjustable_id`. Each Adjustment has a `source` (the thing that created it: a TaxRate, PromotionAction, ReturnAuthorization, etc.) and built-in scopes to filter by source type:
-
-```ruby
-order.adjustments.tax                     # source_type: 'Spree::TaxRate'
-order.adjustments.promotion               # source_type: 'Spree::PromotionAction'
-order.adjustments.return_authorization
-order.all_adjustments                     # adjustments on order + its line_items + shipments
-```
-
-## Prefixed IDs
-
-Every Spree model exposed via the v3 API has a Stripe-style prefixed ID:
-
-```ruby
-product.prefixed_id  # => "prod_86Rf07xd4z"
-order.prefixed_id    # => "or_m3Rp9wXz"
-variant.prefixed_id  # => "variant_k5nR8xLq"
-```
-
-IDs are computed from the integer PK via Sqids — no database column. The prefix is declared per-class via `has_prefix_id :<prefix>` on the model. The v3 API accepts and emits prefixed IDs everywhere; `find_by_prefix_id!` resolves them back to integer PKs.
-
-Conventions for the prefix:
-
-- Long form for some resources: `prod` (Product), `variant` (Variant)
-- Short codes for most others: `or` (Order), `py` (Payment, Stripe parity), `adj` (Adjustment), `li` (LineItem), `ctg` (Category/Taxon), `cus` (customer, Stripe parity), `ch` (Channel), `mkt` (Market)
-
-Never expose raw integer PKs in API responses.
-
-## `state` vs `status` (mixed on 5.5)
-
-Different models use different column names depending on when they were introduced:
-
-- `Order.state`, `Payment.state`, `Shipment.state` — older state machines
-- `OrderApproval.status` — newer status column
-- `Channel` doesn't use a state machine — it has an `active` boolean instead
-
-When writing model code, follow the convention of the column the model actually has. When querying, check the model's source if you're not sure.
-
-## `Spree::Current` (per-request context)
-
-Avoid passing store / currency / locale around as arguments. Use the ambient context:
-
-```ruby
-Spree::Current.store      # The store handling this request
-Spree::Current.currency   # The currency to display prices in
-Spree::Current.locale     # The locale for translations
-Spree::Current.channel    # The resolved sales channel (falls back to the store's default channel)
-Spree::Current.market     # The resolved market (falls back to the store's default market)
-```
-
-Available in models, controllers, jobs, and services. Set automatically by controller before_actions on the API (with built-in fallbacks to store defaults inside `Spree::Current`); you set it manually in jobs and rake tasks that need to address a specific store.
-
-## When to read further
-
-- **Field-level docs:** `node_modules/@spree/docs/dist/developer/core-concepts/<topic>.md` for each model.
-- **OpenAPI spec:** `node_modules/@spree/docs/dist/api-reference/store.yaml` lists every API field and its type — better than guessing from the model source.
-- **Adding new models / API resources:** use the `spree-resource` skill.
-- **Extending existing Spree models** (add an association, validation, scope, method via decorator): use the `spree-decorators` skill.
+- `node_modules/@spree/docs/dist/developer/core-concepts/architecture.md` — overview + ER diagram
+- `…/core-concepts/{stores,channels,markets,catalogs,products,pricing,carts,orders,order-totals,taxes,discounts,fees,fulfillments,inventory,payments,returns-exchanges-claims,customers,companies,sellers}.md`
+- `…/how-to/custom-document-numbers.md`
+- https://spreecommerce.org/docs/developer/core-concepts/architecture
