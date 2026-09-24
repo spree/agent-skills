@@ -8,9 +8,9 @@ Read by the project template (`server/config/*`) and Spree gems. Verify against 
 |---|---|---|
 | `DATABASE_URL` | — | Required. `postgres://`, `mysql2://`, or `sqlite3:` URL |
 | `SECRET_KEY_BASE` | — | Required. `openssl rand -hex 64`. Stable per environment |
-| `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY` | — | Active Record encryption (non-deterministic attributes — OAuth identity tokens). Starter `config/application.rb` reads it, falling back to credentials `active_record_encryption.primary_key` |
+| `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY` | — | **Required in every environment** (all three). Active Record encryption (non-deterministic attributes — OAuth identity tokens). Starter `config/application.rb` reads it, falling back to credentials `active_record_encryption.primary_key` |
 | `ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY` | — | Deterministic attributes Spree looks up by (webhook signing secrets, gateway customer IDs). Can't be rotated by Rails |
-| `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT` | — | Set all three together (`spree encryption init --print` / `bin/rails db:encryption:init`). Unset in production → plaintext + boot warning. Never change once data is encrypted |
+| `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT` | — | Set all three together (`spree encryption init --print` / `bin/rails db:encryption:init`). Unset → plaintext + boot warning. Never change once data is encrypted |
 | `RAILS_ENV` | `production` | |
 | `RAILS_LOG_LEVEL` | `info` | Logs go to STDOUT (lograge single-line request logs) |
 | `RAILS_HOST` | — | Public host, no protocol, optional port. Used for `default_url_options`, email links, webhook payloads, attachment URLs. Render fallback: `RENDER_EXTERNAL_HOSTNAME` |

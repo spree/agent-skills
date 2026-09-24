@@ -50,9 +50,11 @@ patterns=(
   # SQL through.
   'DELETE[[:space:]]+FROM[[:space:]]+spree_(orders|carts|payments|refunds|fulfillments|store_credits|gift_cards|users|customers|admin_users|api_keys)([^[:alnum:]_]|$)'
 
-  # ActiveRecord mass deletes via runner / console
-  'Spree::(Order|Cart|Payment|Refund|Fulfillment|StoreCredit|GiftCard|User|Customer|AdminUser|ApiKey)\.(delete|destroy)_all'
-  'Spree\.(user|customer|admin_user)_class\.(delete|destroy)_all'
+  # ActiveRecord mass deletes via runner / console. Unconditional wipes only
+  # (including via `.all` / `.unscoped`); a scoped relation such as
+  # `.where(...).delete_all` is a deliberate, bounded delete and is allowed.
+  'Spree::(Order|Cart|Payment|Refund|Fulfillment|StoreCredit|GiftCard|User|Customer|AdminUser|ApiKey)(\.(all|unscoped))*\.(delete|destroy)_all'
+  'Spree\.(user|customer|admin_user)_class(\.(all|unscoped))*\.(delete|destroy)_all'
 
   # Force-pushes to main/master. Match both flag orderings (`--force …
   # main` and `… main --force`) by checking the components independently

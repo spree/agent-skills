@@ -125,7 +125,7 @@ end
 ## Data privacy (GDPR)
 
 - **Subject requests** are `Spree::DataRequest` records. Customers create them with `POST /api/v3/store/customers/me/data_requests { kind: "access" | "erasure" }` (erasure requires `current_password`). Staff use `GET /api/v3/admin/customers/:id/export` and `POST /api/v3/admin/customers/:id/anonymize`. Exports are built in the background and emailed as expiring signed links.
-- **Erasure means anonymization**, done by the `Spree::Customers::Anonymize` workflow. It scrubs the account, address book, order address snapshots, saved cards, identities, sessions and consent rows. It keeps financial records (orders, payments, tax lines, line items, plus country, state and a truncated postcode for tax jurisdiction), and publishes `customer.anonymized`.
+- **Erasure means anonymization**, done by the `Spree::Customers::Anonymize` workflow. It scrubs the account, address book, order address snapshots, saved cards, identities and sessions, and strips the email, IP and user agent from consent rows (the rows themselves are kept — see Consent below). It keeps financial records (orders, payments, tax lines, line items, plus country, state and a truncated postcode for tax jurisdiction), and publishes `customer.anonymized`.
 - **If you add a table holding personal data, extend anonymization in the same change.** Core has a schema-guard spec that fails when a personal-data column isn't covered.
 - Hooks:
   ```ruby
@@ -134,7 +134,7 @@ end
     Spree.hooks.register('data_requests.fulfill.extend_payload', 'MyApp::LoyaltyExport') # return a Hash to merge
   end
   ```
-- **Consent:** `Spree::ConsentRecord` records acceptance events (purpose, source, time, document digest). The customer also has `email_marketing_consent_updated_at` / `_source`. Consent rows survive erasure with the contact details removed. Cookie consent is the storefront's responsibility.
+- **Consent:** `Spree::ConsentRecord` records acceptance events (purpose, source, time, document digest). The customer also has `email_marketing_consent_updated_at` / `_source`. Consent rows survive erasure (purpose, source and timestamp stay as proof) with email, IP and user agent cleared, and erasure appends an `email_marketing` withdrawal row (source `anonymization`) if the customer had opted in. Cookie consent is the storefront's responsibility.
 - Staff access to `DataRequest` and `ConsentRecord` rides `read_customers` / `write_customers`.
 
 ## PCI scope
