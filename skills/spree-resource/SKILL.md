@@ -1,176 +1,213 @@
 ---
 name: spree-resource
-description: Use when the user wants to add a new model, database table, or REST API endpoint to their Spree project. Covers both `spree:api_resource` (full surface — model + API controllers + serializers + factory + specs + routes) and `spree:model` (model + migration only, no API). Common phrasings include "add a Brand model", "create a new resource", "expose X as an API endpoint", "add an admin API for Y", "scaffold a Spree resource", "create a Spree model without an API", "internal model".
+description: Use when the user wants to add a new model, database table, or REST API endpoint to a Spree 6 project. Covers `spree:api_resource` (model + migration + Store/Admin API controllers + serializers + factory + controller specs + routes + permission scope) and `spree:model` (model + migration only). Common phrasings include "add a Brand model", "create a new resource", "expose X as an API endpoint", "add an Admin API for Y", "scaffold a Spree resource", "create a Spree model without an API", "internal model", "make my model store-scoped".
 ---
 
 # Adding a Spree Resource
 
-> Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
+> Commands use the Spree CLI (`spree …`, Docker, Rails app in `server/`). On a classic Rails app without the CLI, run `bin/rails g spree:api_resource …` from the app root and drop the `server/` prefix from paths (see `spree-project`).
 
-To add a new model that's exposed via the Spree v3 API, use the `spree:api_resource` generator. One command produces:
+To add a model exposed through the v3 API, use the `spree:api_resource` generator. One command produces:
 
-- The model (in `backend/app/models/spree/<name>.rb`)
-- The migration
-- Store + Admin API controllers
-- Store + Admin serializers
-- FactoryBot factory
-- Controller specs covering full CRUD
-- Routes (injected into `spree/api/config/routes.rb`)
+- The model (`server/app/models/spree/<name>.rb`) and its migration
+- Store + Admin API controllers and serializers
+- A FactoryBot factory and controller specs for both APIs
+- Route lines inside the `Spree::Core::Engine.add_routes` block of your app's `config/routes.rb`
+- The `read_<plural>` / `write_<plural>` permission scope (`Spree.permissions.register_scope` appended to `config/initializers/spree.rb`) and its role-editor label (`config/locales/spree_<plural>.en.yml`) — Admin surface only
 
-Prerequisite: run `spree eject` first — the generator executes inside the Docker container, and only the ejected dev compose bind-mounts `./backend`, so generated files appear (and persist) on your host.
+Prerequisite: run `spree eject` first. Generators execute inside the web container, and only the ejected dev compose bind-mounts `./server`, so generated files appear (and persist) on your host.
 
 ## The one-command path
 
 ```bash
-spree generate api_resource Brand name:string:uniq active:boolean --writable
+spree generate api_resource Brand name:string:index slug:string:uniq active:boolean
+spree migrate
 ```
 
-Field syntax follows Rails' attribute parser, with Spree extensions:
+Output summary:
 
-| Modifier | Effect |
+```text
+✓ Generated Spree::Brand API resource
+  Prefixed ID:  brand_xxxxxxxxxx
+  Store API:    /api/v3/store/brands  (read-only)
+  Admin API:    /api/v3/admin/brands  (full CRUD)
+```
+
+Field syntax follows Rails' attribute parser, with Spree conventions applied:
+
+| You write | You get |
 |---|---|
-| `:string`, `:integer`, `:boolean`, `:decimal`, `:date`, `:datetime`, `:text` | Column type |
-| `:uniq` | Unique index on the column + uniqueness validation scoped to `spree_base_uniqueness_scope` |
-| `:index` | Non-unique index |
-| `<name>:belongs_to` (or `<name>:references`) | `belongs_to :<name>` association with index, no FK constraint. Class auto-resolved from the name (`brand` → `Spree::Brand`, `user` → `Spree.user_class`, `admin_user`/`created_by`/`approver`/`canceler` → `Spree.admin_user_class`); override with an unqualified class hint in braces: `category:belongs_to{TaxonCategory}` |
+| `name:string` / `:text` / `:integer` / `:decimal` / `:boolean` / `:date` / `:datetime` | `null: false` column; presence validation for non-boolean fields |
+| `name:string:index` | Non-unique index |
+| `slug:string:uniq` | Unique index + uniqueness validation — scoped to `store_id` when the model is store-scoped (the default), plus `spree_base_uniqueness_scope` |
+| `brand:belongs_to` (or `:references`) | `belongs_to` with `class_name`, index, **no FK constraint**, `null: false` |
+| `category:belongs_to{TaxCategory}` | Explicit class hint (unqualified names only) → `class_name: 'TaxCategory'`, resolved inside the `Spree` namespace |
+| `description:rich_text` | `has_spree_rich_text` + `Spree::SanitizableRichText` |
+| `logo:attachment` / `photos:attachments` | `has_one_attached` / `has_many_attached` |
 
-Example field specs:
-
-```
-name:string:uniq               # unique non-null string with index + validator
-description:text               # non-null text column
-active:boolean                 # non-null boolean
-price:decimal                  # non-null decimal
-brand:belongs_to               # association to Spree::Brand (class auto-resolved from the attribute name; use brand:belongs_to{OtherClass} for an explicit, unqualified class hint)
-```
+`belongs_to` class resolution: `user` → `Spree.customer_class`; `admin_user`, `created_by`, `approver`, `canceler` → `Spree.admin_user_class`; anything else → `Spree::<Camelized>`.
 
 ## Flags
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--writable` | off | Store API gets full CRUD. Default Store API is read-only (index + show) — customer-facing endpoints rarely accept writes. |
-| `--no-store` | (off) | Skip generating the Store API surface. Resource only exists under Admin. |
-| `--no-admin` | (off) | Skip generating the Admin API surface. Rare; usually you want admin CRUD. |
-| `--store-name=Discount` | (off) | Expose the Store API under a different external name. The model + table + Admin stay as `Brand`; only the Store API path becomes `/api/v3/store/discounts`. Used for cases like the Promotions/Discounts split. |
-| `--paranoid` | off | Adds `acts_as_paranoid` to the model + `deleted_at` column + index. Soft-delete instead of hard-delete. |
-| `--metafields` | off | Includes `Spree::Metafields` and `Spree::Metadata` concerns. Use when the resource should support user-defined custom fields. |
-| `--id-prefix=brand` | snake-cased class name | The Stripe-style prefix on the resource's IDs. `Brand` defaults to `brand_<id>`. Override for shorter forms (e.g. `--id-prefix=br` for `br_<id>`). Conventions in core: mostly short abbreviations (`prod_`, `opt_`, `adj_`), two-letter for high-traffic (`or_`, `py_`); a few full words (`variant_`, `price_`, `zone_`). |
-| `--skip-routes` | off | Don't inject routes into `routes.rb`. You're on your own to wire them up. |
+| `--writable` | off | Store API gets create/update/destroy. Default Store API is read-only (index + show). |
+| `--no-store` | — | Skip the Store API controller + serializer + route. Admin-only resource. |
+| `--no-admin` | — | Skip the Admin API surface. Rare. |
+| `--store-name=Discount` | — | Expose the Store API under a different name (`/api/v3/store/discounts`); model, table and Admin API keep the canonical name. |
+| `--no-store-scoped` | scoped | By default the model includes `Spree::SingleStoreResource` (`store_id` column, `belongs_to :store`, auto-assigned from `Spree::Current.store`, `for_store` scope, store can't be changed later). Opt out only for global reference data. |
+| `--no-lifecycle-events` | on | By default the model calls `publishes_lifecycle_events` (`brand.created/updated/deleted` events for subscribers and webhooks). |
+| `--custom-fields` | off | Includes `Spree::HasCustomFields` + `Spree::Metadata` (merchant-defined custom fields + `metadata` JSON). |
+| `--paranoid` | off | `acts_as_paranoid` + `deleted_at` column/index; Admin serializer exposes `deleted_at`. |
+| `--id-prefix=br` | snake-cased class name | Prefixed-ID prefix (`brand_…` by default). Core uses short prefixes: `prod_`, `variant_`, `cart_`, `or_`, `py_`, `ful_`, `cust_`, `sl_`. |
+| `--parent=Spree::Foo` | `Spree.base_class` | Parent class expression. |
+| `--permission-group=settings` | `catalog` | Where the `read_`/`write_` keys appear in the role editor and API-key scope picker (`orders`, `catalog`, `customers`, `settings`, … or your own lowercase identifier). |
+| `--skip-routes` | off | Don't touch routes. |
 | `--skip-specs` | off | Don't generate controller specs. |
 
 ## What gets created
 
-For `spree generate api_resource Brand name:string:uniq active:boolean --writable`:
-
 ```
-backend/app/models/spree/brand.rb                                 (owned-once)
-backend/db/migrate/<ts>_create_spree_brands.rb                    (append-only)
-backend/app/controllers/spree/api/v3/store/brands_controller.rb   (managed)
-backend/app/controllers/spree/api/v3/admin/brands_controller.rb   (managed)
-backend/app/serializers/spree/api/v3/brand_serializer.rb          (managed)
-backend/app/serializers/spree/api/v3/admin/brand_serializer.rb    (managed)
-backend/spec/factories/spree/brand_factory.rb                     (managed)
-backend/spec/controllers/spree/api/v3/store/brands_controller_spec.rb (managed)
-backend/spec/controllers/spree/api/v3/admin/brands_controller_spec.rb (managed)
-<spree_api gem>/config/routes.rb                                  (idempotent inject — resolved via the installed gem, not under backend/; skipped with a warning if the gem path is read-only)
+server/app/models/spree/brand.rb                                    (owned-once)
+server/db/migrate/<ts>_create_spree_brands.rb                       (append-only)
+server/app/controllers/spree/api/v3/store/brands_controller.rb      (managed)
+server/app/controllers/spree/api/v3/admin/brands_controller.rb      (managed)
+server/app/serializers/spree/api/v3/brand_serializer.rb             (managed)
+server/app/serializers/spree/api/v3/admin/brand_serializer.rb       (managed)
+server/spec/factories/spree/brand_factory.rb                        (managed)
+server/spec/controllers/spree/api/v3/{store,admin}/brands_controller_spec.rb (managed)
+server/config/routes.rb                                             (idempotent inject)
+server/config/initializers/spree.rb                                 (idempotent append — register_scope)
+server/config/locales/spree_brands.en.yml                           (owned-once — permission label)
 ```
 
-## The "owned-once / managed-forever / append-only" contract
+Generated model (store-scoped default):
 
-- **Model file (owned-once)** — the generator writes it once. Once it exists, the generator never touches it again. Your domain logic (validations, scopes, callbacks, custom methods) lives here and stays yours.
-- **Migration (append-only)** — generated once at resource creation. To change the schema later, add a separate migration: `spree rails g migration AddFooToBar foo:string`.
-- **Controllers, serializers, specs, factory (managed)** — the generator overwrites these on re-run. If you customize them by hand, your changes get wiped next time you regenerate. Re-runs are idempotent — Thor's `identical` check leaves bytes-equal files alone.
-- **Routes (idempotent inject)** — added between `# BEGIN spree:api_resource managed routes` and `# END` sentinel markers. Re-runs don't duplicate.
+```ruby
+module Spree
+  class Brand < Spree.base_class
+    include Spree::SingleStoreResource
+
+    has_prefix_id :brand
+    publishes_lifecycle_events
+
+    validates :name, presence: true
+    validates :slug, presence: true, uniqueness: { scope: [:store_id, *spree_base_uniqueness_scope] }
+    self.whitelisted_ransackable_attributes = %w[name slug active]
+    self.whitelisted_ransackable_associations = %w[]
+    self.whitelisted_ransackable_scopes = %w[]
+  end
+end
+```
+
+**Routes.** The generator inserts `resources :brands, only: [:index, :show]` (store) and `resources :brands` (admin) into the `namespace :store` / `namespace :admin` blocks inside `Spree::Core::Engine.add_routes` in `config/routes.rb` (create-spree-app / spree-starter ship this block empty). If the block or namespace is missing, it skips with a warning — add it by hand:
+
+```ruby
+Rails.application.routes.draw do
+  Spree::Core::Engine.add_routes do
+    namespace :api, defaults: { format: 'json' } do
+      namespace :v3 do
+        namespace :store do
+          resources :brands, only: [:index, :show]
+        end
+        namespace :admin do
+          resources :brands
+        end
+      end
+    end
+  end
+  mount Spree::Core::Engine, at: '/'
+end
+```
+
+## The "owned-once / managed / append-only" contract
+
+- **Model (owned-once)** — written once; re-runs never touch it. Your validations, scopes, associations live here.
+- **Migration (append-only)** — generated once. Change schema with a new migration: `spree generate migration AddLogoToSpreeBrands logo_url:string`.
+- **Controllers, serializers, factory, specs (managed)** — overwritten on re-run. If you hand-edit them, don't re-run the generator for that resource (or re-apply your edits).
+- **Routes and permission scope (idempotent)** — a route line or `register_scope(:brands, …)` already present isn't duplicated. The permission locale file is owned-once, so an edited label survives re-runs.
 
 ## After running the generator
 
-The summary panel at the end of generator output lists the next steps:
+1. **Review the model** — add validations, associations, scopes. Generated `belongs_to` is required (Spree models require `belongs_to` by default; failure message is "must exist"). Add `optional: true` and relax the migration's `null: false` for optional references.
+2. **Migrate** — `spree migrate`.
+3. **Grant the permission** — the Admin controller declares `scoped_resource :brands`, and the generator registered the matching scope in `config/initializers/spree.rb`:
 
-1. **Review the generated model** — add validations, scopes, callbacks, custom methods that are specific to your resource.
-2. **Apply the migration** — `spree migrate`.
-3. **Set up authorization** — the generator can't infer who's allowed to access the resource under what conditions. Add CanCanCan rules in `backend/app/models/spree/permission_sets/` or `backend/config/initializers/spree.rb` so the resource's API surface actually returns data.
-4. **Decide store-scoping** — if the resource should be scoped to a Store (most catalog data is), add `has_many :brands` on `Spree::Store` and override the controller's `scope` method.
-5. **Run the specs** — `spree exec bundle exec rspec spec/controllers/spree/api/v3/`. The generated specs cover happy paths; add edge cases as you go.
+   ```ruby
+   # Permissions for the Brand API — grants read_brands / write_brands
+   # to staff roles and secret API keys. Labels: config/locales/spree_brands.en.yml
+   Spree.permissions.register_scope(:brands, group: :catalog, resources: -> { [Spree::Brand] })
+   ```
+
+   Until you grant `read_brands` / `write_brands` to a staff role (dashboard **Settings → Roles**, the Admin API, or seeds) or mint them on a secret key, only full-access principals get in (the `admin` role, `read_all`/`write_all` keys). The label lives under `spree.permissions_catalog.resources.brands` (`label`, optional `description`). With `--no-admin` nothing is registered. See `spree-auth-permissions`.
+4. **Store-scoping on reads** — the base controller scopes collections with `Model.for_store(current_store)`. `SingleStoreResource` provides that scope; for `--no-store-scoped` models `for_store` falls back to `current_store.<plural>` if the association exists, else the whole table. Add `has_many :brands, class_name: 'Spree::Brand', dependent: :destroy` to `Spree::Store` via a decorator if you want `current_store.brands`. A permission decides *whether* someone may read brands, not *which* ones — keep lookups store-scoped.
+5. **Permitted attributes** — the generated controllers declare the writable columns in `resource_permitted_attributes` (not a `permitted_params` override), so extension-declared attributes (`Spree::Brand.additional_permitted_attributes += [...]`) and param normalization still apply:
+
+   ```ruby
+   def resource_permitted_attributes
+     [:name, :slug, :active]
+   end
+   ```
+
+   Edit the list to drop columns clients shouldn't write — but the controllers are managed, so a re-run restores the template.
+6. **Run the specs** — `spree rspec spec/controllers/spree/api/v3/`. The specs use the `'API v3 Store guest'` / `'API v3 Admin authenticated'` shared contexts from `spree_api`'s testing support (see `spree-testing`).
+
+## Adding a status
+
+Spree has no state machines. For a record with a lifecycle, add a string `status` column and use `Spree::HasStatus`; transitions belong in workflows (see `spree-workflows`):
+
+```ruby
+include Spree::HasStatus
+has_status :draft, :active, :archived, default: :draft   # predicates (active?), scopes (.active), inclusion validation, .with_status(...)
+```
+
+Extensions append statuses with `Spree::Brand.add_status('paused', after: 'active')`. Don't use Rails enums for status.
 
 ## TypeScript types
 
-The Lefthook pre-commit pipeline that regenerates `packages/sdk` / `packages/admin-sdk` TypeScript types and Zod schemas applies only when developing inside the spree monorepo itself (its hook watches `spree/api/app/serializers/**/*.rb`). In a CLI-created project, serializers you generate are app-local — they don't appear in the published `@spree/sdk` / `@spree/admin-sdk` types, so type your custom resources by hand in your storefront/admin client code. (The published SDK types are emitted as TypeScript interfaces, so for fields you add to *existing* Spree resources you can use declaration merging — `declare module '@spree/sdk' { interface Product { ... } }` — but brand-new resources need their own hand-written types.)
+In a project, serializers you generate are app-local — they're not in the published `@spree/sdk` / `@spree/admin-sdk` types. Call custom endpoints via `client.request<T>(...)` with hand-written types (see `spree-typescript-sdk`). The generated serializer's `typelize` line documents the JSON types (decimals serialize as strings).
 
 ## Common patterns
 
-**Read-only catalog resource** (the default):
-
 ```bash
+# Read-only catalog resource (Store GET, Admin CRUD)
 spree generate api_resource Brand name:string:uniq active:boolean
+
+# Writable customer-facing resource
+spree generate api_resource SavedList label:string user:belongs_to --writable
+
+# Admin-only back-office data
+spree generate api_resource SupplierNote body:text --no-store
+
+# Soft-delete + custom fields
+spree generate api_resource Vendor name:string:uniq slug:string:uniq --paranoid --custom-fields
+
+# Global reference data (no store_id)
+spree generate api_resource Certification code:string:uniq --no-store-scoped
 ```
 
-Customers can GET via Store API; admins have full CRUD via Admin API.
-
-**Writable customer-facing resource** (rare, but real — e.g. saved addresses):
-
-```bash
-spree generate api_resource SavedAddress label:string user:belongs_to --writable
-```
-
-**Admin-only resource** (back-office data):
-
-```bash
-spree generate api_resource AuditLog action:string details:text --no-store
-```
-
-**Soft-delete with custom fields** (e.g. a Vendor with metadata):
-
-```bash
-spree generate api_resource Vendor name:string:uniq slug:string:uniq --paranoid --metafields
-```
+For a writable customer resource, remember the Store API authorizes by ownership: override `scope` in the Store controller to read through the customer (e.g. `current_user.saved_lists`), otherwise any shopper can see every record in the store.
 
 ## Model only — no API surface
 
-If you want a Spree model but no Store/Admin API (internal-only record, supporting model, lookup table), use the **`spree:model` generator** directly. It produces the model file + migration with all the Spree conventions baked in — no controllers, serializers, or routes. Unlike `spree:api_resource` (which strips Rails' test-framework hooks), `spree:model` keeps them — and dev/starter apps typically configure rspec + factory_bot as generator hooks (e.g. via a `config/initializers/spree_dev_tools.rb` setting `g.test_framework :rspec` + `g.fixture_replacement :factory_bot`), in which case you'll also get a stub model spec and factory, as with any `rails g model`.
+`spree:model` produces the model + migration with the same conventions (prefixed ID, `Spree.base_class`, store scoping, lifecycle events, `null: false`, no FKs, ransack allowlists) and accepts the same model flags (`--paranoid`, `--custom-fields`, `--id-prefix`, `--parent`, `--no-store-scoped`, `--no-lifecycle-events`). Unlike `api_resource`, it keeps Rails' test-framework hooks, so with rspec/factory_bot configured you also get a stub model spec and factory.
 
 ```bash
-spree generate model Brand name:string:uniq active:boolean   # bare names auto-prefix to spree:
+spree generate model BrandImage position:integer brand:belongs_to
 ```
 
-The `spree:model` generator is what `spree:api_resource` inherits from; running it standalone is the right choice when:
+Use it when the record is internal (log, join table), only reachable through a parent's API, or you'll hand-write controllers. To add an API later, run `spree generate api_resource Brand …` — it detects the existing model and skips the model + migration (owned-once), generating only the API surface.
 
-- The record is internal-only (event log, audit trail, internal join table)
-- The record is exposed only through a parent's API (e.g. `BrandImage` accessed via `brand.images`, not directly)
-- You want to write controllers and serializers by hand (custom auth, non-RESTful shape)
-- You're scaffolding a model that will be associated with an existing Spree class via decorator (see the `spree-decorators` skill)
+## Gotchas
 
-### What it produces
+- **Don't add FK constraints** or Rails enums; keep `foreign_key: false` and string statuses.
+- **Extending core models** (e.g. `brand_id` on products) is a decorator + `Spree::Product.additional_permitted_attributes += [:brand_id]` (never `<<` — the array is frozen). See `spree-decorators`.
+- **Jobs, rake tasks, console:** store-scoped records need a store. Set `Spree::Current.store = store` (don't rely on `Spree::Store.default`, which can be nil).
+- **Custom read-only member actions** — add them to `read_actions` in the controller so they map to `read_*` instead of `write_*`.
 
-For `spree generate model Brand name:string:uniq active:boolean`:
+## Where to read further
 
-```
-backend/app/models/spree/brand.rb                   (owned-once)
-backend/db/migrate/<ts>_create_spree_brands.rb      (append-only)
-backend/spec/models/spree/brand_spec.rb             (stub, via Rails' test_framework hook)
-backend/spec/factories/spree/brands.rb              (stub, via the fixture_replacement hook)
-```
-
-The model has:
-- `class Brand < Spree.base_class` (the swappable base lookup, not hardcoded)
-- `has_prefix_id :brand` (auto-derived from class name, override with `--id-prefix`)
-- `null: false` on every column in the migration
-- No foreign key constraints (Spree convention)
-- Uniqueness validation scoped to `spree_base_uniqueness_scope` for any `:uniq` field
-- Ransack allowlist set to the generated attributes (empty `_associations` and `_scopes` arrays for you to fill in)
-
-### Flags
-
-The `spree:model` generator accepts the same Spree-specific flags as `api_resource`:
-
-| Flag | Effect |
-|---|---|
-| `--paranoid` | Add `acts_as_paranoid` + `deleted_at` column + index |
-| `--metafields` | Include `Spree::Metafields` + `Spree::Metadata` concerns |
-| `--id-prefix=br` | Override the prefixed-ID prefix |
-| `--parent=Spree::SomeBase` | Override the parent class (default is `Spree.base_class`) |
-
-Plus everything Rails' built-in model generator accepts (column types, indexes, references, etc.).
-
-### When to upgrade to `spree:api_resource`
-
-If you later decide the model needs API access, run `spree generate api_resource Brand …` — the generator detects the existing model file and won't overwrite it. It'll generate the controllers, serializers, factory, specs, and routes around your hand-managed model.
+- `node_modules/@spree/docs/dist/developer/tutorial/model-and-api.md` — end-to-end Brand walkthrough
+- `node_modules/@spree/docs/dist/developer/customization/permissions.md` — `register_scope`
+- `node_modules/@spree/docs/dist/developer/customization/api.md` — extending the API
+- Generator source: `spree/core/lib/generators/spree/{api_resource,model}/`

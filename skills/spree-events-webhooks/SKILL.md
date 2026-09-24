@@ -1,101 +1,115 @@
 ---
 name: spree-events-webhooks
-description: Use when the user wants Spree to react to something that happened — sync orders to an ERP, send notifications, fire webhooks, integrate with external services, configure webhook endpoints, verify webhook signatures. Common phrasings include "react to X", "when X happens", "send notification when", "sync to external service", "Spree events", "subscribers", "publish_event", "webhook endpoint", "webhook signature", "X-Spree-Webhook-Signature", "HMAC", "webhook retry", "webhook failed", "webhook.test". Covers in-process subscribers (Ruby side effects) AND outbound webhooks (HTTPS POSTs to external URLs).
+description: Use when the user wants Spree 6 to react to something that happened — sync placed orders to an ERP/WMS, send a notification, keep an audit trail, fire outbound webhooks, configure webhook endpoints, verify webhook signatures, or debug a subscriber or delivery that never arrived. Common phrasings include "when an order is placed", "react to X", "Spree events", "subscriber", "publish_event", "publishes_lifecycle_events", "order.placed", "order.completed", "webhook endpoint", "X-Spree-Webhook-Signature", "HMAC", "webhook retry", "webhook disabled", "webhook.test", "audit log / state changes". Covers in-process subscribers AND outbound webhooks, and when to use a workflow hook instead.
 ---
 
 # Spree Events + Webhooks
 
-Spree has **two layered systems** for reacting to lifecycle events. Both subscribe to the same events; what differs is the delivery target.
+Spree announces what happened (`order.placed`, `payment.completed`, `fulfillment.fulfilled`, …) through one event bus. Two consumers sit on it:
 
-| System | Lives | Use for |
+| Consumer | Lives | Use for |
 |---|---|---|
-| **Subscribers** | Ruby code in your Rails app | Sync to your own ERP, send transactional email, update analytics, invalidate caches |
-| **Webhooks** | HTTPS POSTs to external URLs | Third-party integrations, partner systems, customer-built apps |
+| **Subscribers** | Ruby classes in your Spree app | Your own side effects — ERP sync, custom email, analytics, audit history |
+| **Webhooks** | HTTPS POSTs to external URLs | Another system is the consumer — Next.js storefront, n8n/Zapier/Make, partner apps |
 
-You pick a subscriber when **you** are the consumer. You pick a webhook when **another system** is the consumer.
+If the reacting code lives outside the Rails app, use a webhook. If it lives inside, use a subscriber.
 
-## Part 1: Subscribers (in-process)
+### Events vs workflow hooks
 
-```
-Spree::Order.complete!
-  ↓
-order.publish_event('order.completed', payload)
-  ↓
-Spree::Subscribers each receive the event
-  ↓
-Your subscriber: sync to ERP, send email, etc.
-```
+Events fire **after the fact** and normally run in the background. They cannot stop or change the operation. If you need to veto (`workflow.reject!`), add a step, or feed data into a calculation *while the operation runs*, register a workflow hook instead — `Spree.hooks.register('<flow>.<hook>', Handler)` — see the `spree-workflows` skill.
 
-Automatic lifecycle events (`*.created`, `*.updated`, `*.deleted`) fire after the transaction commits — if the write fails, those subscribers never run. Custom events published via `publish_event(...)` (including `order.completed`) are dispatched at the call site, which may be inside an open transaction: sync subscribers run inline, and async subscriber jobs are enqueued immediately — possibly before the commit. Don't assume the surrounding write has committed.
+| Need | Use |
+|---|---|
+| Block a cart completion / return / cancel under a business rule | Hook (`*.validate`) |
+| Do something extra inside the flow, same transaction | Hook (`after_*`) |
+| Push a placed order to a WMS, send a Slack message | Subscriber |
+| Notify a system outside Spree | Webhook |
+| Keep a history of status changes | Subscriber writing your own table |
 
-### Writing a subscriber
+**Events are the audit trail.** Spree keeps no `StateChange`/`LogEntry` rows. Every meaningful transition already publishes an event (`order.placed`, `order.canceled`, `payment.completed`, `payment.voided`, `fulfillment.fulfilled`, `fulfillment.delivered`, `fulfillment.canceled`, `return.*` …). If you need persistent history, write it from a subscriber.
 
-Use the generator (Spree 5.5+) — it creates the class, a spec stub, and handles registration:
+## Events Spree publishes
+
+Two kinds:
+
+1. **Lifecycle events** — `<prefix>.created`, `.updated`, `.deleted`, emitted after commit by models that declare `publishes_lifecycle_events` (orders, carts, line items, products, variants, prices, payments, fulfillments, stock levels, returns, customers, media, and many more). Customers use the `user.*` prefix (`user.created`, …). A bare `touch` does not emit `.updated`.
+2. **Business events** — published explicitly at the moment that matters:
+
+| Event | When |
+|---|---|
+| `order.placed` | Checkout completed (or an admin placed a draft order). Payload includes `notify_customer` |
+| `order.paid` | Payments cover the order total |
+| `order.fulfilled` / `order.delivered` | Every fulfillment handed over / delivered |
+| `order.canceled` | Order canceled (final — orders can't be resumed) |
+| `order.approved` | Risky order approved by staff |
+| `cart.created` / `.updated` / `.deleted` | Cart lifecycle — carts are a separate resource from orders |
+| `payment.completed` / `.captured` / `.voided` / `.refunded` | Payment moments |
+| `payment_session.completed` / `.failed` / `.expired` … | Provider session outcomes (same set on `payment_setup_session.*`) |
+| `fulfillment.fulfilled` / `.delivered` / `.canceled` | Parcel went out / arrived / stood down (`fulfilled` metadata carries `notify_customer`) |
+| `product.out_of_stock` / `.back_in_stock` / `.activated` / `.archived` | Catalog availability |
+| `return.*`, `exchange.*`, `claim.*` | Post-purchase flows (`return.received`, `return.refunded`, …) |
+| `digital_link.downloaded` | Customer downloaded a digital asset |
+| `import.completed`, `import_row.failed` | Bulk imports |
+
+Full list with payload notes: [references/events.md](references/events.md). The canonical reference is `webhooks-events.md` in the docs (see bottom).
+
+**Pick the specific event.** `order.updated` fires on every note edit; `order.placed` fires once. Sending a confirmation on `order.updated` is how customers get nine emails.
+
+### Renamed events (one-release aliases)
+
+`order.completed` → `order.placed`, `order.shipped` → `order.fulfilled`, `shipment.shipped` → `fulfillment.fulfilled`, `shipment.canceled` → `fulfillment.canceled`, `stock_item.*` → `stock_level.*`, `wished_item.*` → `wishlist_item.*`, `digital.*` → `digital_asset.*`. The old names are still published alongside the new ones until 6.1 — so an `order.*` subscriber sees **both** `order.placed` and `order.completed`, and a `fulfillment.*`+`shipment.*` one sees both names too. Subscribe to the new names. Only `order.completed` carries `metadata.deprecated_alias_of`; in wildcard handlers skip the old names explicitly (see the audit recipe). Coming from 5.x? See `spree-upgrade-5-to-6`.
+
+## Part 1: Subscribers
+
+### Generate one
 
 ```bash
-spree generate subscriber OrderComplete order.completed   # native: bin/rails g spree:subscriber …
-# flags: --sync (async: false), --skip-spec
+spree generate subscriber OrderPlaced order.placed order.canceled   # classic: bin/rails g spree:subscriber …
+# --sync       → subscribes_to …, async: false
+# --skip-spec  → no spec/subscribers/… file
 ```
 
-Or by hand: put the class anywhere autoloadable (e.g. `app/subscribers/`), then register it in an initializer — subscribers are NOT auto-discovered, and an unregistered subscriber is a silent no-op:
+It writes `app/subscribers/order_placed_subscriber.rb`, a spec, and — the step people forget — the registration line in `config/initializers/spree.rb`:
 
 ```ruby
-# config/initializers/spree.rb
 Rails.application.config.after_initialize do
-  Spree.subscribers << OrderCompleteSubscriber
+  Spree.subscribers << OrderPlacedSubscriber
 end
 ```
 
+Subscribers are **not** auto-discovered. An unregistered subscriber is a silent no-op.
+
 ```ruby
-# app/subscribers/order_complete_subscriber.rb
-class OrderCompleteSubscriber < Spree::Subscriber
-  subscribes_to 'order.completed'
+# app/subscribers/order_placed_subscriber.rb
+class OrderPlacedSubscriber < Spree::Subscriber
+  subscribes_to 'order.placed'
 
   def handle(event)
-    order_id = event.payload['id']
-    ExternalErp.sync_order(order_id)
+    order = Spree::Order.find_by_prefix_id(event.payload['id'])
+    return unless order
+
+    WarehouseClient.new.submit(order)
   end
 end
 ```
 
-The handler method is `handle(event)` (or route with the `on` DSL below). Don't override `call` — the base `call` is the dispatch entry that routes `on`-declared handlers and falls back to `handle`, so overriding it silently disables `on` routing. Subscribers run **asynchronously** via `Spree::Events::SubscriberJob` by default; opt into synchronous execution only when the side effect must complete before the publisher's transaction returns:
+- Implement `handle(event)`. Don't override `call` — the base `call` routes `on` handlers and falls back to `handle`.
+- `event.name`, `event.payload` (string keys, serialized with the API v3 serializer — prefixed IDs, money as strings), `event.metadata` (always `spree_version`), `event.store_id`, `event.id` (UUID), `event.created_at`.
+- Payloads carry the record's top-level attributes only; load the record (`find_by_prefix_id`) when you need associations.
 
-```ruby
-class CriticalOrderHandler < Spree::Subscriber
-  subscribes_to 'order.completed', async: false
-
-  def handle(event)
-    # Runs inline, blocks the publisher
-  end
-end
-```
-
-### Multiple events from one subscriber
-
-Single handler, dispatch on `event.name`:
-
-```ruby
-class OrderActivitySubscriber < Spree::Subscriber
-  subscribes_to 'order.completed', 'order.paid', 'order.shipped'
-
-  def handle(event)
-    case event.name
-    when 'order.completed' then track_completion(event)
-    when 'order.paid'      then track_payment(event)
-    when 'order.shipped'   then track_shipment(event)
-    end
-  end
-end
-```
-
-Or use the `on` DSL to route specific events to specific methods:
+### Several events, wildcards, routing
 
 ```ruby
 class PaymentSubscriber < Spree::Subscriber
-  subscribes_to 'payment.completed', 'payment.voided'
+  subscribes_to 'payment.completed', 'payment.voided', 'return.*'
 
   on 'payment.completed', :handle_complete
-  on 'payment.voided', :handle_void
+  on 'payment.voided',    :handle_void
+  # anything without an `on` falls through to #handle
+
+  def handle(event)
+    Rails.logger.info("[returns] #{event.name}")
+  end
 
   private
 
@@ -109,396 +123,218 @@ class PaymentSubscriber < Spree::Subscriber
 end
 ```
 
-### Pattern matching
+### Async (default) vs sync
 
-Wildcards subscribe to a family of events:
+By default each subscriber runs in `Spree::Events::SubscriberJob` on `Spree.queues.events` (`:default` unless you change it), so a slow API call never slows checkout. The job retries up to 3 times on errors — **make handlers idempotent** (check whether you already acted).
+
+`subscribes_to 'order.placed', async: false` runs inline in the publishing process. Errors raised by sync subscribers are reported via `Rails.error` and **re-raised only in development/test** — in production they are swallowed, so don't rely on a sync subscriber to abort anything (use a hook for that).
+
+### Publishing your own events
+
+Any Spree model can publish:
 
 ```ruby
-class OrderEventLogger < Spree::Subscriber
-  subscribes_to 'order.*'
+order.publish_event('order.flagged_for_review')                     # payload = serialized order
+order.publish_event('order.flagged_for_review', { 'id' => order.prefixed_id, 'score' => 87 })
+Spree::Events.publish('brand.synced', { 'id' => brand.prefixed_id })  # from anywhere
+```
 
-  def handle(event)
-    Rails.logger.info("Order event: #{event.name}")
+Custom events flow to subscribers **and** webhook endpoints. Publish after your write commits — `publish_event` dispatches immediately, and async subscribers could otherwise read uncommitted data.
+
+### Lifecycle events on your own model
+
+```ruby
+module Spree
+  class Brand < Spree.base_class
+    publishes_lifecycle_events                     # brand.created / .updated / .deleted
+    # publishes_lifecycle_events only: [:create, :delete]
+    # publishes_lifecycle_events except: [:update]
+    # self.event_prefix = 'brand'                  # override the prefix if needed
   end
 end
+```
+
+The payload uses `Spree::Api::V3::BrandSerializer` if it exists (the `spree:api_resource` generator creates it), otherwise a minimal `{ id, created_at, updated_at }`. `.deleted` captures the payload before destroy.
+
+### Silencing events
+
+```ruby
+Spree::Events.disable { bulk_fix! }                 # nothing published in the block
+Spree::Events.disable_lifecycle { import_rows! }    # suppress *.created/updated/deleted only
+```
+
+Use in data migrations and backfills so you don't flood webhooks.
+
+### Store context matters
+
+Every event records `store_id` from `Spree::Current.store`. Webhook delivery **skips events with no store**, and endpoints only receive events from their own store. In jobs, rake tasks and console scripts set it explicitly:
+
+```ruby
+Spree::Current.store = order.store
+order.publish_event('order.flagged_for_review')
 ```
 
 ## Part 2: Webhooks (outbound HTTPS)
 
 ```
-Spree::Order.complete!
-  ↓
-order.publish_event('order.completed', payload)
-  ↓
-Spree::WebhookEventSubscriber receives it (shipped with spree_api)
-  ↓
-For each Spree::WebhookEndpoint subscribed_to?('order.completed'):
-  ↓
-Create Spree::WebhookDelivery (queued)
-  ↓
-Spree::WebhookDeliveryJob (ActiveJob, on Spree.queues.webhooks) → POST to endpoint URL
-  ↓
-On failure: delivery recorded as failed (manual redeliver available)
-On 15 consecutive failures: auto-disable endpoint
+event published ─▶ Spree::WebhookEventSubscriber (subscribes to '*', ships with spree_api)
+  ─▶ for each enabled Spree::WebhookEndpoint in event.store_id that subscribed_to?(name)
+  ─▶ Spree::WebhookDelivery (whd_…) ─▶ Spree::WebhookDeliveryJob (Spree.queues.webhooks)
+  ─▶ Spree::Webhooks::DeliverWebhook: signed POST, 30s timeout, result recorded
 ```
 
-### Configuring an endpoint
+### Create an endpoint
 
-Admin UI: **Settings → Webhooks → Add endpoint**.
-
-Via API:
+Dashboard: **Settings → Developer → Webhooks**. Or the Admin API:
 
 ```bash
-curl -X POST https://my-spree.example.com/api/v3/admin/webhook_endpoints \
-  -H "X-Spree-Api-Key: sk_…" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Order sync to ERP",
-    "url": "https://my-erp.example.com/spree-webhooks",
-    "subscriptions": ["order.completed", "order.paid", "order.shipped"],
-    "active": true
-  }'
+spree api post /webhook_endpoints -d '{
+  "name": "ERP sync",
+  "url": "https://erp.example.com/spree-webhooks",
+  "subscriptions": ["order.placed", "order.canceled", "fulfillment.*"],
+  "active": true
+}'
 ```
 
-The response includes a plaintext `secret_key` **only on create** (Stripe-style — you'll never see it again, store it). Use it to verify signatures on the receiving end.
+```ts
+const endpoint = await admin.webhookEndpoints.create({
+  url: 'https://erp.example.com/spree-webhooks',
+  subscriptions: ['order.placed', 'fulfillment.*'],
+})
+endpoint.secret_key // 64-char hex — returned ONLY on create; store it now
+```
 
-`subscriptions` is an array of event names. Supports:
-- Exact match: `"order.completed"`
-- Wildcard: `"order.*"` matches `order.completed`, `order.paid`, etc.
-- Catch-all: `"*"` or empty array — receive everything
+- `subscriptions`: exact names, wildcards (`order.*`), or `"*"`/empty = everything.
+- Endpoints belong to the current store (set from the request, never passed).
+- Endpoint IDs are `whe_…`, deliveries `whd_…`.
+- `spree_api` config: `SPREE_WEBHOOKS_ENABLED` (global kill switch), `SPREE_WEBHOOKS_VERIFY_SSL` (default on outside development).
+- Password-reset events for admin and seller users are never delivered, even to `*` endpoints.
+- `customer.password_reset_requested` carries a live reset token, so it is in `Spree::WebhookEndpoint::CREDENTIAL_EVENTS`: it reaches **only endpoints that list it by name** — never `*`, an empty subscription list, or a pattern like `customer.*`. Creating an endpoint that names it, or changing the URL/subscriptions of one that does, needs `write_customers` on top of `write_webhooks` (403 otherwise).
+- Customer records publish `user.created` / `user.updated` / `user.deleted` (plus `customer.anonymized`, `customer.password_reset*`) — there is no `customer.created`.
 
-### Webhook payload format
+### Envelope + headers
 
-```json
-POST /your-webhook-url HTTP/1.1
+```http
+POST /spree-webhooks
 Content-Type: application/json
 User-Agent: Spree-Webhooks/1.0
-X-Spree-Webhook-Signature: <hex hmac>
-X-Spree-Webhook-Timestamp: 1728432000
-X-Spree-Webhook-Event: order.completed
+X-Spree-Webhook-Signature: <hex hmac-sha256>
+X-Spree-Webhook-Timestamp: 1767225600
+X-Spree-Webhook-Event: order.placed
 
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "name": "order.completed",
-  "created_at": "2026-06-08T12:00:00Z",
-  "data": {
-    "id": "or_m3Rp9wXz",
-    "number": "R123456789",
-    "total": "129.99",
-    "...": "..."
-  },
-  "metadata": {
-    "spree_version": "5.5.0"
-  }
-}
+{ "id": "<event uuid>", "name": "order.placed", "created_at": "…",
+  "data": { "id": "or_m3Rp9wXz", "number": "R123456789", "total": "129.99", "notify_customer": true, … },
+  "metadata": { "spree_version": "6.0.0" } }
 ```
 
-### Verifying the signature
+`id` is the event UUID — use it to dedupe on the receiving side.
 
-The signature is HMAC-SHA256 over `"{timestamp}.{payload_json}"` using the endpoint's `secret_key`. **Always verify** — without it any actor can forge POSTs to your URL.
+### Verify the signature
+
+HMAC-SHA256 over `"#{timestamp}.#{raw_body}"` with the endpoint's `secret_key`.
 
 ```ruby
-# Ruby receiver
-def verify_webhook(request)
-  timestamp = request.headers['X-Spree-Webhook-Timestamp']
-  signature = request.headers['X-Spree-Webhook-Signature']
-  body = request.body.read
+def verified?(request)
+  ts   = request.headers['X-Spree-Webhook-Timestamp'].to_i
+  sig  = request.headers['X-Spree-Webhook-Signature'].to_s
+  body = request.raw_post
+  return false if (Time.current.to_i - ts).abs > 300   # replay window
 
-  # Reject replays older than 5 minutes
-  return false if (Time.current.to_i - timestamp.to_i).abs > 300
-
-  expected = OpenSSL::HMAC.hexdigest('SHA256', ENV['SPREE_WEBHOOK_SECRET'], "#{timestamp}.#{body}")
-  ActiveSupport::SecurityUtils.secure_compare(expected, signature)
+  expected = OpenSSL::HMAC.hexdigest('SHA256', ENV.fetch('SPREE_WEBHOOK_SECRET'), "#{ts}.#{body}")
+  ActiveSupport::SecurityUtils.secure_compare(expected, sig)
 end
 ```
 
 ```ts
-// Node receiver
-import crypto from 'crypto'
+import crypto from 'node:crypto'
 
-function verifyWebhook(req: Request): boolean {
-  const timestamp = req.headers['x-spree-webhook-timestamp']
-  const signature = req.headers['x-spree-webhook-signature']
-  const body = req.rawBody  // raw bytes, NOT the parsed JSON
-
-  // Reject replays older than 5 minutes
-  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) return false
-
-  const expected = crypto
-    .createHmac('sha256', process.env.SPREE_WEBHOOK_SECRET!)
-    .update(`${timestamp}.${body}`)
-    .digest('hex')
-
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature as string))
+export function verified(rawBody: string, ts: string, sig: string, secret: string) {
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false
+  const expected = crypto.createHmac('sha256', secret).update(`${ts}.${rawBody}`).digest('hex')
+  return expected.length === sig.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig))
 }
 ```
 
-**Gotchas:**
-1. **Verify on the raw body, not the parsed JSON.** Re-serializing JSON changes whitespace and key order — the signature won't match.
-2. **Always use timing-safe compare** (`secure_compare`, `timingSafeEqual`). String `==` leaks the secret via timing side-channel.
-3. **Check the timestamp** to reject replay attacks. 5 minutes is the conventional window.
+Verify against the **raw** body (re-serialized JSON won't match), always timing-safe compare, always check the timestamp. In Next.js route handlers read `await req.text()` before parsing.
 
-### Retry + auto-disable
+### Failures, redelivery, auto-disable
 
-Failed deliveries (timeout, 5xx, connection error) are recorded on the delivery record — Spree does **not** automatically retry a failed delivery. (Don't be misled by the `retry_on StandardError, attempts: 5` on `WebhookDeliveryJob`: `DeliverWebhook` rescues HTTP/timeout errors and records them as failed without re-raising, so that ActiveJob retry path never fires for ordinary delivery failures.) Retry manually with `delivery.redeliver!` (creates a fresh delivery and queues it), the admin UI's redeliver button on the delivery page, or `POST /api/v3/admin/webhook_endpoints/:webhook_endpoint_id/deliveries/:id/redeliver`. After **15 consecutive failures**, the endpoint auto-disables and an email goes to store staff (`Spree::WebhookMailer.endpoint_disabled`).
+- A non-2xx response, timeout or connection error marks the delivery failed (`response_code`, `response_body`, `error_type`, `request_errors`, `execution_time`) and `Spree::WebhookDeliveryJob` **retries it with backoff** (`retry_on …, wait: :polynomially_longer, attempts: 5`): 5 attempts in total over roughly six minutes, each overwriting the outcome on the **same** delivery record (the log shows the latest attempt). Retries stop as soon as the endpoint is switched off (by hand or by auto-disable); an exhausted retry is not re-raised into the queue backend. Every attempt carries the same event `id` — dedupe on it.
+- Resend manually once retries are exhausted: dashboard delivery log, `delivery.redeliver!`, `POST /api/v3/admin/webhook_endpoints/:id/deliveries/:id/redeliver`, or `admin.webhookEndpoints.deliveries.redeliver(whe, whd)`.
+- After **15 consecutive failed deliveries** (`Spree::WebhookEndpoint::AUTO_DISABLE_THRESHOLD`; counted per delivery record, not per retry attempt) the endpoint is disabled (`active: false`, `disabled_at` set) and staff get `Spree::WebhookMailer.endpoint_disabled`. Re-enable with `endpoint.enable!`, `PATCH …/webhook_endpoints/:id/enable`, or by setting `active: true` in the dashboard — all clear the disabled state.
+- **The delivery log is not the wire payload.** Credentials are redacted before `spree_webhook_deliveries.payload` is written and re-attached only in memory at send time (`Spree::WebhookPayloadRedaction`): `token` (guest cart token), `reset_token`, `unsubscribe_token`, `verification_token`, `download_url`, payment-session client secrets, and a gift card's `code`. Receivers get the real values (automatic retries included); the log and Admin API show `[REDACTED]`. A manual redelivery resends the stored payload, so those fields arrive as `[REDACTED]` — don't rely on redelivering password-reset or payment-session events.
+- The Admin API returns a delivery's `payload` only when the caller can read the record the event is about (`delivery.payload_permission_key`, e.g. `read_orders` for `order.*`, `read_customers` for `customer.*`/`user.*` and any unmapped subject); otherwise `payload` is `null` and only status/response are shown.
+- If you need guaranteed delivery, make the receiver fast (ack 2xx, then queue) and reconcile periodically via the Admin API.
 
-Re-enable via `endpoint.enable!` or by toggling `active: true` in the admin UI. A more recent successful delivery breaks the consecutive-failure streak (the check queries recent deliveries — there's no stored counter).
-
-Inspect failures:
+### Test an endpoint
 
 ```ruby
-endpoint = Spree::WebhookEndpoint.find_by_prefix_id('whe_…')
-endpoint.webhook_deliveries.where(success: false).order(delivered_at: :desc).first(20)
-# Each has: response_code, response_body, error_type, request_errors, execution_time
+endpoint.send_test!   # queues a synthetic 'webhook.test' delivery
 ```
 
-### Testing an endpoint
+Or `POST /api/v3/admin/webhook_endpoints/:id/send_test` / the dashboard "Send test" button.
 
-The admin UI has a "Send test" button — fires a synthetic `webhook.test` event so you can verify connectivity without waiting for a real order to complete.
+### SSRF + extra headers
+
+Outside development, endpoint URLs that resolve to private/loopback addresses are rejected on save and requests go through `ssrf_filter`. In development, localhost / `host.docker.internal` work. To add outbound headers (e.g. trace propagation), append a callable in `config.to_prepare`:
 
 ```ruby
-endpoint.send_test!   # creates and queues a Spree::WebhookDelivery
+Spree::Webhooks::DeliverWebhook.header_decorators << ->(headers, delivery) { headers['X-Env'] = Rails.env }
 ```
 
-### SSRF protection
+## Recipes
 
-In production, endpoint URLs are validated against private IP ranges (RFC 1918, link-local, loopback) via `ssrf_filter`. In development, this is disabled so you can webhook to `localhost` / `host.docker.internal`.
-
-## Events Spree publishes
-
-### Order lifecycle
-
-| Event | When |
-|---|---|
-| `order.completed` | Customer finalizes the order (post-payment) |
-| `order.paid` | All payments processed successfully |
-| `order.shipped` | All of the order's shipments are marked shipped (`order.fully_shipped?`) — a partial shipment doesn't fire it |
-| `order.approved` | An admin approves a pending order |
-| `order.canceled` | Order is canceled |
-| `order.resumed` | A canceled order is reactivated |
-| `order.updated` | General-purpose order change event |
-
-### Payment lifecycle
-
-| Event | When |
-|---|---|
-| `payment.completed` | Payment captured |
-| `payment.paid` | Payment moves to paid state |
-| `payment.voided` | Payment voided before capture |
-
-### Payment session lifecycle
-
-| Event | When |
-|---|---|
-| `payment_session.processing` | Session is being processed by the provider |
-| `payment_session.completed` | Session completes (returns to your app from payment provider) |
-| `payment_session.failed` | Provider returned failure |
-| `payment_session.canceled` | Customer canceled |
-| `payment_session.expired` | Session timed out |
-
-Payment **setup** sessions (saving a payment method without charging) fire the same set: `payment_setup_session.processing`, `.completed`, `.failed`, `.canceled`, `.expired`.
-
-### Shipment lifecycle
-
-| Event | When |
-|---|---|
-| `shipment.shipped` | Shipment marked shipped (tracking set) |
-| `shipment.canceled` | Shipment canceled |
-| `shipment.resumed` | A previously-canceled shipment is resumed |
-
-### Product lifecycle
-
-| Event | When |
-|---|---|
-| `product.activated` | Product becomes available for sale |
-| `product.archived` | Product is archived |
-| `product.back_in_stock` | A product moves from out-of-stock to in-stock |
-| `product.out_of_stock` | A product becomes out of stock |
-
-### Gift cards
-
-| Event | When |
-|---|---|
-| `gift_card.redeemed` | Card fully redeemed |
-| `gift_card.partially_redeemed` | Card partially redeemed |
-
-### Returns + reimbursements
-
-| Event | When |
-|---|---|
-| `return_authorization.canceled` | Return authorization canceled |
-| `return_item.given` | A return item is given to the customer (exchange) |
-| `return_item.received` | A return item is received back from the customer |
-| `return_item.canceled` | A return item line is canceled |
-| `reimbursement.reimbursed` | Reimbursement processed (refund or store credit issued) |
-
-### Imports
-
-| Event | When |
-|---|---|
-| `import.completed` | Import job finished |
-| `import.progress` | Progress checkpoint during large imports (emitted every 10th completed row group) |
-| `import_row.completed` | Single row imported successfully |
-| `import_row.failed` | Single row failed |
-
-### Invitations
-
-| Event | When |
-|---|---|
-| `invitation.created` | Staff/customer invitation sent |
-| `invitation.accepted` | Invitee created their account |
-| `invitation.resent` | Invitation re-sent |
-
-### Newsletter
-
-| Event | When |
-|---|---|
-| `newsletter_subscriber.subscription_requested` | Customer requested a subscription (pending double opt-in) |
-| `newsletter_subscriber.verified` | Customer confirmed the subscription |
-
-### Customer
-
-| Event | When |
-|---|---|
-| `customer.password_reset_requested` | Customer requested a password reset email |
-| `customer.password_reset` | Customer successfully reset their password |
-
-### Automatic lifecycle events
-
-Models that include `publishes_lifecycle_events` emit `<model_singular>.created`, `<model_singular>.updated`, `<model_singular>.deleted` automatically after the create, update, and destroy transactions commit (the `.deleted` payload is captured before destroy). Examples (5.5):
-
-- `payment.created`, `payment.updated`, `payment.deleted`
-- `shipment.created`, `shipment.updated`, `shipment.deleted`
-- `variant.created`, `variant.updated`, `variant.deleted`
-- `price.created`, `price.updated`, `price.deleted`
-- `stock_movement.created`, `stock_movement.updated`, `stock_movement.deleted`
-- `report.created`, `gift_card.created`, `refund.created`, `return_authorization.created`, `digital.created`
-
-To make your own model emit lifecycle events:
+**Persist an audit trail**
 
 ```ruby
-module Spree
-  class Brand < Spree.base_class
-    publishes_lifecycle_events           # all three
-    # or: publishes_lifecycle_events only: [:create, :delete]
-  end
-end
-```
-
-## Event payloads
-
-Every payload includes the **prefixed ID** (`'id' => 'or_…'` for orders, `'py_…'` for payments). Many include additional context:
-
-```ruby
-# order.completed payload
-{
-  'id' => 'or_m3Rp9wXz',
-  'notify_customer' => true,   # whether to send the confirmation email
-  # ...
-}
-```
-
-Check the `publish_event(...)` call site in the model emitting the event to see the exact payload. Don't assume.
-
-For **webhook** payloads, the same data is wrapped in the envelope shown above (`{id, name, created_at, data, metadata}`).
-
-## When to use which
-
-| Need | Use |
-|---|---|
-| Send custom transactional email | Subscriber |
-| Sync to your own ERP/warehouse | Subscriber |
-| Update internal analytics service | Subscriber |
-| Invalidate Rails cache | Subscriber (inline, not async) |
-| Notify customer's Zapier workflow | Webhook |
-| Trigger n8n / Zapier / Make.com workflows | Webhook |
-| Update partner system across the internet | Webhook |
-| Notify your own non-Rails service | Webhook (or message bus if scaled) |
-
-## When NOT to use either
-
-- **Business logic that's part of order completion itself** — that goes in services (the cart pipeline, checkout state machine). Events fire after-the-fact.
-- **Data validation** — belongs on the model.
-- **Things that need to run inside the order's transaction** — events fire post-commit. If it really must be transactional (rare), use a callback.
-
-## Common recipes
-
-### Send custom email on order complete (subscriber)
-
-```ruby
-class OrderConfirmationSubscriber < Spree::Subscriber
-  subscribes_to 'order.completed'
+class OrderAuditSubscriber < Spree::Subscriber
+  subscribes_to 'order.*', 'payment.*', 'fulfillment.*'
+  LEGACY_ALIASES = %w[order.completed order.shipped].freeze
 
   def handle(event)
-    order = Spree::Order.find_by_prefix_id(event.payload['id'])
-    MyOrderMailer.confirmation(order).deliver_later
+    return if LEGACY_ALIASES.include?(event.name)        # 6.0 dual-emitted old names
+    AuditEntry.create_or_find_by!(event_id: event.id) do |e|
+      e.name = event.name
+      e.resource_id = event.payload['id']
+      e.payload = event.payload
+    end
   end
 end
 ```
 
-### Forward all order events to a partner (webhook)
-
-```bash
-curl -X POST https://my-spree.example.com/api/v3/admin/webhook_endpoints \
-  -H "X-Spree-Api-Key: sk_…" \
-  -d '{"url":"https://partner.example.com/spree","subscriptions":["order.*"]}'
-```
-
-### React to payment failure (subscriber)
+**Slack on failed payment session**
 
 ```ruby
 class PaymentFailureSubscriber < Spree::Subscriber
   subscribes_to 'payment_session.failed'
 
   def handle(event)
-    order = Spree::Order.find_by_prefix_id(event.payload['order_id'])
-    Slack.notify("Payment failed for #{order.number} (session #{event.payload['id']})")
-  end
-end
-```
-
-### Sync inventory after stock movement (subscriber, async)
-
-```ruby
-class InventorySyncSubscriber < Spree::Subscriber
-  subscribes_to 'stock_movement.created', async: true
-
-  def handle(event)
-    movement = Spree::StockMovement.find_by_prefix_id(event.payload['id'])
-    WarehouseApi.update_stock(movement.stock_item.variant)
+    Slack.notify("Payment session #{event.payload['id']} failed")
   end
 end
 ```
 
 ## Debugging
 
-### "My subscriber doesn't fire"
+**Subscriber never runs**
+1. `Spree.subscribers.include?(MySubscriber)` — registered?
+2. Exact event name? (`order.placed`, not `order.complete`.) Watch the log: `[Spree Event] order.placed | payload: …` (disable with `Spree::Config.events_log_enabled = false`).
+3. Async? Is the job worker running (Solid Queue / Sidekiq), and did `Spree::Events::SubscriberJob` fail?
+4. Tests: core's suite disables events globally; if your suite does too, tag the example `events: true` or wrap in `Spree::Events.enable { … }`.
 
-1. Registered? `Spree.subscribers.include?(MySubscriber)` should be true.
-2. Event name matches? `subscribes_to 'order.completed'` — exact string match.
-3. Transaction committed? Subscribers run after commit; if the save raises, they don't fire.
-4. Async-only failure? Check `Spree::Events::SubscriberJob` failures in your job backend (queued on `Spree.queues.events`, `:default` by default).
+**Endpoint receives nothing**
+1. `endpoint.active? && !endpoint.auto_disabled?`
+2. `endpoint.subscribed_to?('order.placed')`
+3. Event had a store? (`Spree::Current.store` set in jobs/scripts.) Endpoint in the same store?
+4. `endpoint.send_test!`, then `endpoint.webhook_deliveries.recent.first` for `response_code` / `request_errors`.
+5. `SPREE_WEBHOOKS_ENABLED` not set to false; job worker running.
 
-### "My webhook endpoint isn't receiving anything"
-
-1. **Active?** `endpoint.active?` and not `auto_disabled?`.
-2. **Subscribed?** `endpoint.subscribed_to?('order.completed')` should be true.
-3. **URL reachable?** `endpoint.send_test!` then check `endpoint.webhook_deliveries.last`.
-4. **SSRF blocking?** In production, private IPs are rejected. Check `endpoint.errors` if you can't save.
-5. **Job backend running?** `WebhookDeliveryJob` is async (ActiveJob). If your worker (e.g. Sidekiq) is down, deliveries pile up in the queue.
-
-### "Signatures don't verify"
-
-Almost always one of:
-1. **Verifying against parsed JSON** instead of the raw request body. Re-serialization changes the bytes.
-2. **Wrong secret.** Each endpoint has its own; check you're using the right one for the endpoint in question.
-3. **Timestamp window too narrow.** Some clocks drift; 5 minutes is reasonable.
-4. **String `==` instead of timing-safe compare** — usually still produces the right boolean, but if you're seeing intermittent fails check this.
+**Signature mismatch** — parsed body instead of raw, wrong endpoint's secret, or clock drift beyond your window.
 
 ## Where to read further
 
-- **Subscriber base class:** `Spree::Subscriber` source.
-- **Events docs:** `node_modules/@spree/docs/dist/developer/core-concepts/events.md`; **Webhooks docs:** `node_modules/@spree/docs/dist/developer/core-concepts/webhooks.md`; **Per-event payload schemas:** `node_modules/@spree/docs/dist/api-reference/webhooks-events.md`.
-- **Webhook source:** `Spree::WebhookEndpoint`, `Spree::WebhookDelivery`, `Spree::Webhooks::DeliverWebhook`, `Spree::WebhookEventSubscriber`.
-- **Admin UI:** Settings → Webhooks (manages endpoints, view delivery history with response codes/bodies, replay failed deliveries).
-- **For the API surface:** see the `spree-api-v3` skill — webhook endpoints have full CRUD via `/api/v3/admin/webhook_endpoints`.
+- Events: `node_modules/@spree/docs/dist/developer/core-concepts/events.md`
+- Webhooks: `node_modules/@spree/docs/dist/developer/core-concepts/webhooks.md`
+- Every event + payload: `node_modules/@spree/docs/dist/api-reference/webhooks-events.md` (https://spreecommerce.org/docs/api-reference/webhooks-events)
+- Source: `Spree::Subscriber`, `Spree::Publishable`, `Spree::Events`, `Spree::WebhookEndpoint`, `Spree::WebhookDelivery`, `Spree::Webhooks::DeliverWebhook`, `Spree::WebhookEventSubscriber`
+- Related skills: `spree-workflows` (hooks), `spree-security` (webhook receivers), `spree-testing` (testing subscribers)

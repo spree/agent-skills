@@ -1,126 +1,77 @@
 ---
 name: spree-decorators
-description: Use when the user wants to extend a Spree model, controller, helper, or service class without forking — add an association to Spree::Product, add a method to Spree::Order, override a validation, add a scope, prepend a before_action, hook into create. Common phrasings include "add brand to product", "decorate Spree::X", "ProductDecorator", "OrderDecorator", "Module#prepend", "spree:model_decorator", "extend an existing Spree model", "add a method to Spree::Order", "override Spree behavior", "monkey patch Spree". Provides the decorator pattern, the generator, the prepended(base) idiom, and the gotchas. Mentions when NOT to decorate — events for after-save side effects, dependencies for service swaps, the resource generator for whole new models.
+description: Use when the user wants to extend an existing Spree 6 model or API controller without forking — add an association to Spree::Product, add a validation or scope, add a method to Spree::Cart / Spree::Order, narrow what an API v3 endpoint returns, permit an extra attribute on writes. Common phrasings include "add brand to product", "decorate Spree::X", "ProductDecorator", "OrderDecorator", "Module#prepend", "spree:model_decorator", "spree:controller_decorator", "extend an existing Spree model", "add a method to Spree::Order", "override Spree behavior", "monkey patch Spree", "customize an API controller". Provides the decorator pattern, the generators, the prepended(base) idiom, API controller decorators and the gotchas — and routes behavioral changes to workflow hooks, events or dependencies instead.
 ---
 
 # Spree Decorators
 
-> Commands below use the Spree CLI form (`spree …`, Docker). On a classic Rails app without the CLI (typical pre-5.4), use the native mapping in the `spree-project` skill — `bin/rails` / `bundle exec rake` from the app root, paths without the `backend/` prefix.
+> Commands use the Spree CLI (`spree …`). On a classic Rails app without the CLI, use `bin/rails g …` from the app root. Paths assume the Rails app lives in `server/`.
 
-Decorators let you change existing Spree classes (models, controllers, helpers, services) from your own app without modifying gem source. They're the standard Ruby `Module#prepend` pattern with a Spree filename convention and a generator.
+Decorators change existing Spree classes from your app with Ruby's `Module#prepend`, using a Spree filename convention and two generators. They couple you to Spree internals — use them for **structural** changes (association, validation, scope, read-only helper method, a narrowed controller scope), not for behavior.
 
-## Read the warning first
-
-Decorators tightly couple your code to Spree internals. They will *probably* survive a minor upgrade and *might* survive a major one. The Spree docs are explicit: **decorators are for structural changes** (add an association, validation, scope, new method). For behavioral changes (callbacks, side effects, post-save sync), use a modern alternative instead.
-
-### Pick the right tool
+## Pick the right tool first
 
 | Use case | Use this instead of a decorator |
 |---|---|
-| React to a save / create / update / delete | [Events subscriber](https://spreecommerce.org/docs/developer/core-concepts/events) — see the `spree-events-webhooks` skill |
-| Notify an external service when something changes | Webhook or events subscriber |
-| Swap how a service computes (cart add, tax, search, checkout) | `Spree.dependencies` — see the `spree-dependencies` skill |
-| Replace a serializer or ability | `Spree.dependencies` |
-| Add an admin menu item | Admin navigation API — see the `spree-admin` skill |
-| Add a section to an admin form | Admin partial injection / slot — see the `spree-admin` skill |
-| Add a searchable/filterable field | `Spree.ransack.add_attribute(Spree::Product, :brand_id)` in an initializer (also `add_association` / `add_scope`) — no decorator needed |
-| Add an association, validation, scope, or new method | **Decorator** (this skill) |
+| Veto an operation (add-to-cart limit, checkout rule, cancel/return policy) | **Workflow `validate` hook** — `spree-workflows` |
+| Contribute data to tax / promotion calculation | **Workflow context hook** — `spree-workflows` |
+| Do something alongside a cart/order/fulfillment/payment operation | **Workflow lifecycle hook** — `spree-workflows` |
+| React after a save / sync to ERP / send notification | **Event subscriber** — `spree-events-webhooks` |
+| Replace how a flow computes | `Spree.dependencies` — `spree-dependencies` |
+| Change an API response shape | Serializer subclass via `Spree.api.*_serializer` — `spree-dependencies` |
+| Accept an extra attribute on API writes | `Model.additional_permitted_attributes += [...]` (below) |
+| Make a field filterable via `q[...]` | `Spree.ransack.add_attribute(Spree::Product, :brand_id)` |
+| Store an extra value without a migration | Custom fields (`product.set_custom_field('ns.key', value)`) — `spree-catalog` |
+| Add a new endpoint | A new `ResourceController` subclass — `spree-resource` |
+| Admin UI changes | Dashboard plugins / slots — `spree-dashboard-plugins` |
+| Add an association, validation, scope, or helper method to a model | **Decorator** (this skill) |
+| Narrow an existing endpoint's `scope`, swap its `serializer_class` | **Controller decorator** (this skill) |
 
-If your job is "react to product update by syncing to an ERP," write a subscriber on `product.updated`, not a `after_save` callback in a decorator. The decorator path will break the next time Spree changes how Product saves.
+Never decorate business verbs (`Order#finalize!`, `Order#cancel`, `Payment#capture!`, `Fulfillment#finalize!`): they are deprecated shells that delegate to workflows, and the real flows (`Spree::Carts::Complete`, `Spree::Orders::Cancel`, `Spree::Payments::Capture`) don't call them. Status transitions have no state-machine callbacks to hook either — use the workflow's hooks.
 
-## The pattern in three lines
-
-A decorator is just a Ruby module prepended to an existing Spree class. The file lives in your app at the same path Spree uses, with `_decorator` appended.
+## The pattern
 
 ```ruby
-# app/models/spree/product_decorator.rb
+# server/app/models/spree/product_decorator.rb
 module Spree
   module ProductDecorator
-    # methods, prepended hook, etc.
+    def self.prepended(base)
+      # class-level: associations, validations, scopes, class_attributes — called on base
+    end
+
+    # instance methods here; call super to reach the original
   end
 
   Product.prepend(ProductDecorator)
 end
 ```
 
-Host-app decorators are loaded by an explicit glob, not by plain autoloading: spree-starter (and the `spree:install` generator) put a `config.to_prepare` block in `config/application.rb` that loads every `app/**/*_decorator*.rb` file, so the `prepend` line runs at boot and again after every code reload in development. If your app has neither (check `config/application.rb` for the block), add it — Zeitwerk alone will never load an unreferenced decorator module in development, and your decorators will silently not apply. Once loaded, your module enters the method-lookup chain ahead of `Spree::Product`'s own definitions: your methods are found first and can `super` to call the original.
+Decorators are loaded by a `config.to_prepare` block in `config/application.rb` (added by the Spree installer) that globs `app/**/*_decorator*.rb` — so `prepend` runs at boot and after every dev reload. If your app lacks that block, add it: Zeitwerk alone never loads an unreferenced decorator and it will silently not apply.
 
-## Generate the file
-
-Spree ships two generators — one for models, one for controllers. **Use them** — they produce the exact filenames, modules, and `prepend` lines the autoloader expects.
-
-### Models
+## Generators
 
 ```bash
 spree generate model_decorator Spree::Product
-# or, without the @spree/cli wrapper:
-bin/rails g spree:model_decorator Spree::Product
+# → server/app/models/spree/product_decorator.rb
+
+spree generate controller_decorator Spree::Api::V3::Admin::ProductsController
+# → server/app/controllers/spree/api/v3/admin/products_controller_decorator.rb
 ```
 
-The CLI auto-prefixes `spree:` for Spree generators (`spree g model_decorator ...` also works as a shorthand).
-
-Output at `app/models/spree/product_decorator.rb`:
-
-```ruby
-module Spree
-  module ProductDecorator
-    def self.prepended(base)
-      # base.belongs_to :brand
-    end
-
-    # add custom methods here
-  end
-end
-
-Spree::Product.prepend Spree::ProductDecorator
-```
-
-The argument accepts either `Spree::Product` or `Product` — the generator strips the prefix. Works for singular model names under `Spree::` (the vast majority), including nested ones. But the generator runs the name through `classify`, which singularizes the last segment — for plural-named classes (e.g. `Spree::Exports::Products`, `Spree::Promotion::Actions::CreateItemAdjustments`) it emits a `prepend` against a non-existent singular constant and the file raises `NameError` on load. Write those decorators by hand instead.
-
-### Controllers
-
-```bash
-spree generate controller_decorator Spree::Admin::ProductsController
-# or, without the @spree/cli wrapper:
-bin/rails g spree:controller_decorator Spree::Admin::ProductsController
-```
-
-Output at `app/controllers/spree/admin/products_controller_decorator.rb`:
-
-```ruby
-module Spree::Admin
-  module ProductsControllerDecorator
-    def self.prepended(base)
-      # base.before_action :my_filter
-    end
-
-    # add custom methods here
-  end
-end
-
-Spree::Admin::ProductsController.prepend Spree::Admin::ProductsControllerDecorator
-```
-
-The generator handles arbitrary namespace depth:
-
-- `Spree::ProductsController` → `app/controllers/spree/products_controller_decorator.rb`
-- `Spree::Admin::ProductsController` → `app/controllers/spree/admin/products_controller_decorator.rb`
-- `Spree::Api::V3::Store::ProductsController` → `app/controllers/spree/api/v3/store/products_controller_decorator.rb`
-
-The final `.prepend` line is always fully qualified — no surprises about which constant is being decorated.
+(`bin/rails g spree:model_decorator …` without the CLI.) The model generator runs the name through `classify`, which singularizes — for plural-named classes (`Spree::Exports::Products`) write the file by hand.
 
 ## Model decorator patterns
 
 ### Add an association
 
-Run the migration first (no foreign key constraint — keep it Spree-style):
+Migration first — Spree style is no FK constraint:
 
 ```bash
-bin/rails g migration AddBrandIdToSpreeProducts brand_id:bigint:index
+spree generate migration AddBrandIdToSpreeProducts brand_id:bigint:index
 ```
 
 ```ruby
-class AddBrandIdToSpreeProducts < ActiveRecord::Migration[7.2]
+class AddBrandIdToSpreeProducts < ActiveRecord::Migration[8.1]
   def change
     add_column :spree_products, :brand_id, :bigint
     add_index :spree_products, :brand_id
@@ -128,15 +79,13 @@ class AddBrandIdToSpreeProducts < ActiveRecord::Migration[7.2]
 end
 ```
 
-Then the decorator:
-
 ```ruby
-# app/models/spree/product_decorator.rb
 module Spree
   module ProductDecorator
     def self.prepended(base)
       base.belongs_to :brand, class_name: 'Spree::Brand', optional: true
       base.has_many :videos, class_name: 'Spree::Video', dependent: :destroy
+      base.additional_permitted_attributes += [:brand_id]   # writable via Admin API (see below)
     end
   end
 
@@ -144,16 +93,24 @@ module Spree
 end
 ```
 
-Class-level additions (associations, validations, scopes, callbacks, `extend`s) **always go inside `self.prepended(base)`** and are called on `base`. Instance methods go at module level.
+`belongs_to` is **required by default** in Spree models — add `optional: true` or every existing product fails with "Brand must exist". Always pass `class_name` (string — resolved lazily, avoids load-order issues) and `dependent:` on `has_many`.
 
-### Add a validation
+### Validation, scope, class method
 
 ```ruby
 module Spree
   module ProductDecorator
     def self.prepended(base)
-      base.validates :external_id, presence: true, uniqueness: true
-      base.validates :weight, numericality: { greater_than: 0 }, allow_nil: true
+      base.validates :external_id, uniqueness: { scope: :store_id }, allow_nil: true   # plus a DB index
+      base.scope :recently_added, -> { where(created_at: 30.days.ago..) }
+      base.scope :tagged_featured, -> { where("metadata->>'featured' = ?", 'true') }  # jsonb on PostgreSQL
+      base.extend ClassMethods
+    end
+
+    module ClassMethods
+      def search_by_name(query)
+        where('LOWER(name) LIKE ?', "%#{sanitize_sql_like(query.downcase)}%")
+      end
     end
   end
 
@@ -161,51 +118,17 @@ module Spree
 end
 ```
 
-### Add a scope
+Models with metadata have a single `metadata` JSON column (`public_metadata` / `private_metadata` no longer exist; `private_metadata` is a deprecated Ruby alias). `metadata` is internal, never exposed on the Store API — for storefront-visible or filterable data prefer a real column or a custom field. JSON operators (`->>`) are PostgreSQL syntax; MySQL/SQLite need different SQL.
+
+Operation-level rules ("max 10 per order", "B2B customers only") are **not** model validations — they belong in a workflow `validate` hook so data migrations and staff corrections aren't blocked. Don't `clear_validators!` to relax a core rule; see `node_modules/@spree/docs/dist/developer/customization/validations.md`.
+
+### Override a method (call `super`)
 
 ```ruby
 module Spree
   module ProductDecorator
-    def self.prepended(base)
-      base.scope :featured, -> { where("public_metadata->>'featured' = ?", 'true') }
-      base.scope :recently_added, -> { where('created_at > ?', 30.days.ago) }
-    end
-  end
-
-  Product.prepend(ProductDecorator)
-end
-```
-
-If you want this scope queryable from the API, also allowlist it via Ransack — see the Ransack note at the bottom.
-
-Note the SQL string names the real jsonb column: `public_metadata` or `private_metadata`. In Ruby, `metadata` is an alias method for `private_metadata` — but there is no `metadata` **column**, so `where("metadata->>…")` raises `PG::UndefinedColumn`. (For anything the storefront filters on, a real boolean column beats metadata anyway.)
-
-### Add a new instance method
-
-```ruby
-module Spree
-  module ProductDecorator
-    def featured?
-      metadata[:featured] == true
-    end
-
-    def days_until_available
-      return 0 if available_on.nil? || available_on <= Time.current
-      (available_on.to_date - Date.current).to_i
-    end
-  end
-
-  Product.prepend(ProductDecorator)
-end
-```
-
-### Override an existing method (call `super`)
-
-```ruby
-module Spree
-  module ProductDecorator
-    def available?
-      return false if discontinued?
+    def purchasable?
+      return false if metadata[:embargoed]
       super
     end
   end
@@ -214,312 +137,175 @@ module Spree
 end
 ```
 
-**Always consider whether you need `super`.** Omitting it replaces the original method entirely — which can silently break behavior the rest of Spree assumes is there.
+Omitting `super` replaces the original entirely. Keep overrides to read-only/derived methods; anything that writes or moves money belongs in a workflow.
 
-### Add class methods
+### Cart & Order: methods live in `Spree::Purchase::*` concerns
 
-Use `extend` from inside `prepended`:
+`Spree::Cart` (pre-checkout) and `Spree::Order` (placed, immutable) share behavior through concerns — `Spree::Purchase::Totals`, `::Addresses`, `::Taxation`, `::PaymentProcessing`, `::CheckoutSteps` (Cart only), `::Validations`, etc. (`spree_core` `app/models/concerns/spree/purchase/`). Before decorating, find where the method is defined (`Spree::Cart.instance_method(:amount).owner`).
+
+- To change it for one side only, decorate `Spree::Cart` **or** `Spree::Order` (the prepended module sits in front of the concern, `super` reaches it).
+- For both, decorate both classes (or prepend to the concern itself: `Spree::Purchase::Totals.prepend(MyTotals)` — Ruby 3 propagates to classes that already included it).
+- Most cart/order logic you'd want to change (adding items, totals, completion) is in workflows, not models — use hooks.
+
+### Permit a new attribute on writes
 
 ```ruby
-module Spree
-  module ProductDecorator
-    def self.prepended(base)
-      base.extend ClassMethods
-    end
-
-    module ClassMethods
-      def search_by_name(query)
-        where('LOWER(name) LIKE ?', "%#{query.downcase}%")
-      end
-    end
-  end
-
-  Product.prepend(ProductDecorator)
-end
+Spree::Product.additional_permitted_attributes += [:brand_id]
+Spree::LineItem.additional_permitted_attributes += [:gift_note]
 ```
 
-Usage: `Spree::Product.search_by_name('shirt')`.
+- Always `+=` (or `|=`). Never `<<` — the default is a frozen array (`FrozenError`) — and never `=`, which drops what other extensions added.
+- Put it in the model decorator's `prepended` (as above) or a `Rails.application.config.to_prepare` block, so it survives dev reloads of the engine's models.
+- API v3 controllers union this list with their own (`resource_permitted_attributes`); `Spree::PermittedAttributes` no longer exists.
+- Line items: `Spree::LineItem.additional_permitted_attributes` is the **only** thing that reaches the record through add-to-cart — sent top-level or inside `options` on `POST /carts/:id/items` (`Spree::Carts::AddItem`). Everything else in `options` is dropped, and `id`, `variant_id` and `quantity` can never be set that way (they were checked and priced already), even if you permit them.
 
-### Make a new attribute available via Ransack
-
-If you added an association or column and want it queryable from the API (`?q[brand_id_eq]=...`), allowlist it. The preferred, no-decorator way is `Spree.ransack` from an initializer:
+### Make it filterable
 
 ```ruby
 # config/initializers/spree.rb
 Spree.ransack.add_attribute(Spree::Product, :brand_id)
-Spree.ransack.add_attribute(Spree::Product, :external_id)
 Spree.ransack.add_association(Spree::Product, :brand)
-Spree.ransack.add_scope(Spree::Product, :featured)
+Spree.ransack.add_scope(Spree::Product, :recently_added)
 ```
 
-If you're already inside a decorator (e.g. you just added the association there), appending to the model allowlists works too:
+Without this, `q[brand_id_eq]=…` is silently dropped (200, unfiltered). `add_association` only widens the **Admin** API: the Store API follows just `storefront_ransackable_associations` (add `Spree::Product.storefront_ransackable_associations |= %w[brand]` in the same initializer if shoppers should filter by brand name) and the Seller API follows none. Hide a staff-only attribute from shoppers/sellers with `private_ransackable_attributes` (`{ store: [...], seller: [...] }`). See `spree-api-v3`.
+
+## Controller decorator patterns (API v3)
+
+The only controllers Spree ships are the API ones — `Spree::Api::V3::Store::*`, `Spree::Api::V3::Admin::*` (and `::Seller::*`). There is no Rails admin or Rails storefront to decorate. Override the **named hooks** a `ResourceController` exposes — `scope`, `serializer_class`, `collection_includes`, `scope_includes`, `resource_permitted_attributes`, `model_class` — not actions.
+
+### Narrow what an endpoint returns
 
 ```ruby
-module Spree
-  module ProductDecorator
-    def self.prepended(base)
-      base.whitelisted_ransackable_attributes += %w[brand_id external_id]
-      base.whitelisted_ransackable_associations += %w[brand videos]
-    end
-  end
-
-  Product.prepend(ProductDecorator)
-end
-```
-
-Without this, filter params on the attribute are silently dropped — the API returns 200 as if that filter were never sent, not an error. See the `spree-api-v3` skill for the full Ransack story.
-
-### Permit a new attribute on writes
-
-If the new attribute should be settable via the admin or the API, register it in the permitted-attributes list:
-
-```ruby
-# config/initializers/spree.rb
-Rails.application.config.after_initialize do
-  Spree::PermittedAttributes.product_attributes << :brand_id
-end
-```
-
-This makes the attribute writable in the Rails admin, which builds its strong params from this list. It does not automatically reach every API v3 endpoint: the v3 base `ResourceController` defaults `permitted_params` to the matching `Spree::PermittedAttributes` list, but controllers that enumerate their own `params.permit(...)` — including `Spree::Api::V3::Admin::ProductsController` — ignore the global list. To accept the attribute on those endpoints, decorate the controller's `permitted_params` (or contribute the attribute upstream).
-
-## Controller decorator patterns
-
-> **First check whether you can avoid this.** A new controller that inherits from a Spree base class is more upgrade-safe than a decorator on an existing controller. Controller decorators that override existing actions are the most fragile decorator type — they couple to instance variables and method signatures that can change between Spree minor releases.
-
-### Add a before_action
-
-Note: Spree no longer ships a Rails storefront — `Spree::CheckoutController` / `Spree::ProductsController` only exist in legacy apps using the separate storefront gem. Modern storefronts are headless via the Store API, so the controllers you'll decorate are the admin and API ones:
-
-```ruby
-# app/controllers/spree/admin/products_controller_decorator.rb
-module Spree::Admin
+# server/app/controllers/spree/api/v3/admin/products_controller_decorator.rb
+module Spree::Api::V3::Admin
   module ProductsControllerDecorator
-    def self.prepended(base)
-      base.before_action :check_editable, only: [:update]
-    end
+    protected
 
-    private
+    # Chain onto super — it is already store-scoped (and ability-scoped on the
+    # Admin API). Replacing it leaks other stores' records.
+    # current_user is nil for secret-key (sk_) requests — guard with &.
+    def scope
+      return super if current_user&.spree_admin?
 
-    def check_editable
-      if params[:id].blank?
-        flash[:error] = Spree.t(:not_found)
-        redirect_to spree.admin_products_path
-      end
+      super.where(discontinue_on: nil)
     end
   end
-
-  ProductsController.prepend(ProductsControllerDecorator)
 end
+
+Spree::Api::V3::Admin::ProductsController.prepend(Spree::Api::V3::Admin::ProductsControllerDecorator)
 ```
 
-Use `bin/rails g spree:controller_decorator Spree::Admin::ProductsController` (or `Spree::Api::V3::Store::CartsController` for API controllers) to scaffold the correct file path and prepend line — the generator handles arbitrary namespace depth. Note: API controller decorators must render JSON errors (e.g. `render json: { error: ... }, status: :unprocessable_entity`), not flash/redirect.
+On the Store API, `current_user` is the signed-in customer (nil for guests); on the Admin API it's the staff member (nil for secret-key requests). Hook methods are `protected` in the base — keep them `protected` in the decorator.
 
-### Add a new action
+### Swap the serializer for one endpoint
 
 ```ruby
-# app/controllers/spree/admin/products_controller_decorator.rb
-module Spree::Admin
+module Spree::Api::V3::Store
   module ProductsControllerDecorator
-    def self.prepended(base)
-      base.before_action :load_product, only: [:quick_view]
-    end
+    protected
 
-    def quick_view
-      respond_to do |format|
-        format.html { render partial: 'quick_view', locals: { product: @product } }
-        format.json { render json: @product }
-      end
-    end
-
-    private
-
-    def load_product
-      @product = current_store.products.friendly.find(params[:id])
+    def serializer_class
+      MyStore::DetailedProductSerializer
     end
   end
-
-  ProductsController.prepend(ProductsControllerDecorator)
 end
+
+Spree::Api::V3::Store::ProductsController.prepend(Spree::Api::V3::Store::ProductsControllerDecorator)
 ```
 
-And the route — Spree controllers live in the engine, so the route must be added to the engine, not your app. Admin routes are drawn through the core engine inside the admin namespace:
+To swap it everywhere, use `Spree.api.product_serializer = …` instead (`spree-dependencies`).
+
+### A new action is a new controller
+
+Don't add actions to Spree's controllers via decorators. Subclass the resource controller — you inherit pagination, Ransack filtering, prefixed IDs, error envelopes and authorization:
+
+```ruby
+# server/app/controllers/spree/api/v3/admin/product_audits_controller.rb
+module Spree::Api::V3::Admin
+  class ProductAuditsController < ResourceController
+    scoped_resource :products   # API-key scope: read_products / write_products (required on Admin controllers)
+
+    protected
+
+    def model_class = MyStore::ProductAudit
+    def serializer_class = MyStore::ProductAuditSerializer
+    def resource_permitted_attributes = [:note]
+  end
+end
+```
 
 ```ruby
 # config/routes.rb
 Spree::Core::Engine.add_routes do
-  namespace :admin, path: Spree.admin_path do
-    get 'products/:id/quick_view', to: 'products#quick_view', as: :product_quick_view
-  end
-end
-```
-
-### Modifying an existing action
-
-The most fragile decorator pattern. If you must:
-
-```ruby
-module Spree
-  module Admin
-    module ProductsControllerDecorator
-      def create
-        log_product_creation_attempt
-        super
-        notify_team_of_new_product if @product.persisted?
-      end
-
-      private
-
-      def log_product_creation_attempt
-        Rails.logger.info "Product creation attempted by #{try_spree_current_user&.email}"
-      end
-
-      def notify_team_of_new_product
-        ProductNotificationJob.perform_later(@product)
+  namespace :api, defaults: { format: 'json' } do
+    namespace :v3 do
+      namespace :admin do
+        resources :product_audits
       end
     end
-
-    ProductsController.prepend(ProductsControllerDecorator)
   end
 end
 ```
 
-The example above is also a case where **the better answer is a subscriber on `product.created`** — same outcome, no coupling to controller internals.
+`spree generate api_resource` scaffolds model + serializer + controller + routes — see `spree-resource`.
+
+API decorators must render JSON (`render_error` / the standard error envelope), never flash/redirect.
 
 ## Common pitfalls
 
-### Forgot to call `super`
+- **Forgot `super`** — silently replaces Spree's logic.
+- **Instance variables in `prepended`** (`@setting = true`) live on the module, not instances — use `base.class_attribute :setting, default: true`.
+- **Constant references at boot** — `has_many :variants` without `class_name: 'Spree::Variant'` can hit load-order errors.
+- **File/module mismatch** — `Spree::ProductDecorator` must live at `app/models/spree/product_decorator.rb`.
+- **Decorating `Spree::Order` for checkout behavior** — pre-checkout state is `Spree::Cart`; the order only exists after `Spree::Carts::Complete`.
+- **`belongs_to` without `optional: true`** — "must exist" errors on existing rows.
+- **`Spree.user_class`** — deprecated; decorate `Spree.customer_class` (default `Spree::Customer`) or `Spree.admin_user_class` (`Spree::AdminUser`).
 
-```ruby
-# ❌ Replaces all of Spree's availability logic — easy to silently break
-def available?
-  in_stock? && active?
-end
-
-# ✅ Extends, doesn't replace
-def available?
-  super && custom_availability_check
-end
-```
-
-### Instance variables in `prepended`
-
-```ruby
-# ❌ Doesn't do what it looks like — @custom_setting lives on the decorator module, not on instances
-def self.prepended(base)
-  @custom_setting = true
-end
-
-# ✅ Use class_attribute when you want a setting on instances
-def self.prepended(base)
-  base.class_attribute :custom_setting, default: true
-end
-```
-
-### Circular dependencies via constant references
-
-When decorators reference each other (or other Spree models that haven't been loaded yet), constant lookups can fail at boot. Use **string class names** for association `class_name:` arguments:
-
-```ruby
-# ❌ Variant might not be loaded yet at decorator boot
-base.has_many :variants
-
-# ✅ String form — resolved lazily
-base.has_many :variants, class_name: 'Spree::Variant'
-```
-
-### File path / module name mismatch
-
-The autoloader is strict about names. `Spree::ProductDecorator` MUST live at `app/models/spree/product_decorator.rb`. The generator gets this right; if you hand-write the file, match it exactly.
-
-## Organizing multiple decorators
-
-If you have many customizations on `Spree::Product`, splitting into focused modules is fine — group by concern:
+## Organizing many decorators
 
 ```
-app/models/spree/
-├── product_decorator.rb           # Main file, prepends the others
-├── product/
-│   ├── brand_decorator.rb         # Brand association
-│   ├── inventory_decorator.rb     # Inventory customizations
-│   └── seo_decorator.rb           # SEO methods
+server/app/models/spree/
+├── product_decorator.rb        # the only file that calls prepend
+└── product/
+    ├── brand_decorator.rb      # plain modules
+    └── seo_decorator.rb
 ```
 
 ```ruby
-# app/models/spree/product_decorator.rb
-require_dependency 'spree/product/brand_decorator'
-require_dependency 'spree/product/inventory_decorator'
-require_dependency 'spree/product/seo_decorator'
-```
-
-This is purely organizational — each child file uses the same `prepend` pattern, just on smaller modules.
-
-## Migrating from decorators to modern patterns
-
-If you inherited a decorator that uses `after_save` for side effects, migrate it to an Events subscriber. Same outcome, no coupling to model internals, won't break when Spree changes how `Spree::Product` saves.
-
-**Before:**
-
-```ruby
-# app/models/spree/product_decorator.rb
 module Spree
   module ProductDecorator
-    def self.prepended(base)
-      base.after_save :sync_to_external_service
-    end
-
-    private
-
-    def sync_to_external_service
-      ExternalSyncJob.perform_later(self) if saved_change_to_name?
-    end
+    include Product::BrandDecorator
+    include Product::SeoDecorator
   end
 
   Product.prepend(ProductDecorator)
 end
 ```
 
-**After:**
+Zeitwerk resolves the nested modules from their paths — no `require` / `require_dependency` (removed in Zeitwerk mode). Note the nested files also match the `*_decorator*.rb` glob, so they must not call `prepend` themselves.
+
+## Migrating callback decorators
+
+A decorator adding `after_save :sync_to_erp` should become a subscriber:
 
 ```ruby
-# app/subscribers/product_sync_subscriber.rb
+# server/app/subscribers/product_sync_subscriber.rb   (spree generate subscriber ProductSync)
 class ProductSyncSubscriber < Spree::Subscriber
   subscribes_to 'product.updated'
 
   def handle(event)
-    product = Spree::Product.find_by_prefix_id(event.payload['id'])
-    return unless product
-
-    ExternalSyncJob.perform_later(product)
+    ExternalSyncJob.perform_later(event.payload['id'])
   end
 end
 ```
 
-Subscribers are **not** auto-discovered from `app/subscribers/` — only classes in the `Spree.subscribers` array get wired to the event registry (Spree's engines add their built-in subscribers there; your app must add its own). Register yours in an initializer:
-
-```ruby
-# config/initializers/spree.rb
-Rails.application.config.after_initialize do
-  Spree.subscribers << ProductSyncSubscriber
-end
-```
-
-Async by default. Testable in isolation. See the `spree-events-webhooks` skill for the full event catalog and the subscriber API.
-
-## When NOT to use a decorator
-
-- **You want a whole new model + API endpoint** → use the `spree:api_resource` generator. See the `spree-resource` skill.
-- **You want to swap how a service computes** → use `Spree.dependencies`. See the `spree-dependencies` skill.
-- **You want to react to a Spree event** → write a subscriber. See the `spree-events-webhooks` skill.
-- **You want to customize the admin UI** → use the admin partial / slot system. See the `spree-admin` skill.
-- **You want a custom payment gateway** → subclass `Spree::PaymentMethod` and register it with `Spree.payment_methods << MyGateway`. See the `spree-payments` skill.
-- **You want to override admin tables or navigation** → use the admin extension APIs (`Spree.admin.tables`, the navigation registry). See the `spree-admin` skill.
-
-The decorator is the **last resort** for structural changes the modern APIs don't cover. When in doubt, check the table at the top of this skill — there's a high chance the modern alternative exists.
+The payload is the serialized record (prefixed `id`), not a changeset. Registration and async behavior: `spree-events-webhooks`. Callbacks that touch money, stock or an external system inside an operation belong in a workflow hook instead.
 
 ## Where to read further
 
-- **Decorator docs:** `node_modules/@spree/docs/dist/developer/customization/decorators.md` (also at https://spreecommerce.org/docs/developer/customization/decorators)
-- **Extending models tutorial:** `node_modules/@spree/docs/dist/developer/tutorial/extending-models.md` — the canonical brand-on-product walkthrough
-- **Events** (for behavioral customizations): the `spree-events-webhooks` skill
-- **Dependencies** (for swappable services): the `spree-dependencies` skill
-- **API resource generator** (for whole new models): the `spree-resource` skill
+- `node_modules/@spree/docs/dist/developer/customization/decorators.md` (https://spreecommerce.org/docs/developer/customization/decorators)
+- `node_modules/@spree/docs/dist/developer/customization/validations.md` — hooks vs decorator validations vs registries
+- `node_modules/@spree/docs/dist/developer/customization/api.md` — custom API endpoints
+- `node_modules/@spree/docs/dist/developer/tutorial/model-and-api.md` — brand-on-product walkthrough
+- Related skills: `spree-workflows`, `spree-dependencies`, `spree-events-webhooks`, `spree-resource`, `spree-customization`
