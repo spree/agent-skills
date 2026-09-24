@@ -118,6 +118,7 @@ Works for any OIDC issuer (Okta, Google Workspace, Keycloak, Auth0). Remove pass
 - **Stateless providers.** They're instantiated with no arguments (delivery rate providers get the `delivery_method`); anything request-specific arrives as a parameter. Don't memoize per-store data on the class.
 - **Class names in registries survive dev reloads** — core re-resolves `delivery_rate_providers` / `fulfillment_providers` on reload; string entries (`'My::Provider'`) are the most reload-safe form where a registry accepts them.
 - **Removing a gem** leaves rows pointing at unregistered classes. Those rows survive (validation runs on change only), and a store whose payout provider disappears falls back to the built-in one — but clean up delivery methods/markets that reference it.
+- **Inbound provider webhooks run in the record's store.** `POST /api/v3/webhooks/{payments,payouts}/:payment_method_id` and `/webhooks/fulfillments/:integration_id` look the payment method / integration up by prefixed ID alone (no API key or store header), set `Spree::Current.store` to its store, and `Spree::Payments::HandleWebhookJob` does the same. Your signature check against that record's own secret is the only authentication — never skip it, and raise rather than return when no secret is configured.
 - **Tax provider ≠ tax rates.** The internal provider uses zones/rates; an external engine replaces the calculation per market. Placed orders are money-frozen — the provider's `commit`/`refund` handle the remote ledger.
 
 ## Where to read further

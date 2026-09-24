@@ -100,7 +100,8 @@ bundle exec rake test_app               # regenerate the dummy app (after schema
 
 - Secrets live in Rails encrypted credentials or env vars — never in the repo, and never in `VITE_*` dashboard variables.
 - Set the three Active Record encryption keys (`ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY`, `_DETERMINISTIC_KEY`, `_KEY_DERIVATION_SALT`) in every environment. Spree encrypts webhook signing secrets, gateway customer IDs and OAuth identity tokens only when they're configured — otherwise plaintext. New projects get a dev set in `.env`; `spree encryption init` adds one to older projects, `spree encryption init --print` (or `bin/rails db:encryption:init`) prints a production set. Never change them once data is encrypted.
-- Webhook receivers MUST verify the HMAC-SHA256 signature with a timing-safe compare and a replay window.
+- Webhook receivers MUST verify the HMAC-SHA256 signature with a timing-safe compare and a replay window, and dedupe on the event `id` — failed deliveries are retried with backoff (up to 5 attempts).
+- Resolve every ID from a request through `current_store` (and ownership / the seller) — including IDs inside write bodies — and don't widen Store/Seller API Ransack filters to private data.
 - Publishable keys (`pk_*`) are safe in client code. Secret keys (`sk_*`) are server-to-server only — never in mobile apps or browser JS. Grant them minimum scopes.
 - Hiding UI in the dashboard is not authorization; the API enforces permissions.
 - See `skills/spree-security/SKILL.md` and `skills/spree-auth-permissions/SKILL.md`.

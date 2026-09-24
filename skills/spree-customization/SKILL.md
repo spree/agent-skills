@@ -110,8 +110,9 @@ spree migrate
 # server/config/initializers/spree.rb
 Rails.application.config.to_prepare do
   Spree::Product.additional_permitted_attributes += [:brand_id]   # += — the default is frozen
+  Spree::Product.storefront_ransackable_associations |= %w[brand]  # Store API filters follow only this list
 end
-Spree.ransack.add_association(Spree::Product, :brand)
+Spree.ransack.add_association(Spree::Product, :brand)            # Admin API filters
 Spree.permissions.register_scope(:brands, group: :catalog, resources: -> { [Spree::Brand] })
 
 # server/app/models/spree/product_decorator.rb — structural addition, the one legit decorator job

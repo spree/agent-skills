@@ -20,11 +20,11 @@ client.onUnauthorized(async () => { const { token } = await client.auth.refresh(
 | `me` | `GET me` (`me.get()`), `PATCH me` (`me.update({ first_name, last_name, selected_locale, avatar })`) | No seller header, no seller role needed. Returns `{ user, sellers, … }` where `user` is an `Account` (team-member fields + `selected_locale`). `avatar` takes a direct-upload signed id, or `null` to remove. This is the *person*; the seller business is `profile` |
 | `profile` | `GET/PATCH profile` (`profile.get()` / `profile.update()`) | The seller business's public profile |
 | `taxIdentifiers` | `tax_identifiers` (index/create/update/destroy, `POST :id/validate`) | |
-| `team`, `invitations` | `team` (index/create/destroy), `invitations` (index/destroy, `PATCH :id/resend`) | The seller hires its own staff |
+| `team`, `invitations` | `team` (index/create/destroy), `invitations` (index/destroy, `PATCH :id/resend`, `GET :id/acceptance_link`) | The seller hires its own staff. Listings carry no acceptance link; `invitations.acceptanceLink(id)` needs `write_seller_profile`. Resend rotates the token |
 | `onboarding` | `GET onboarding`, `POST onboarding/submit_for_review`, `POST onboarding/payout_account` | `payoutAccount({ refresh_url, return_url })` returns `{ url }`, where `url` is null if the provider hosts nothing. Mint the link on click because links expire |
 | `requirementSubmissions` | `POST requirements/:id/submissions`, `GET requirement_submissions/:id/download` | Create only. To change a submission, submit again |
 | `products` | CRUD, plus `PATCH :id/submit`, `:id/draft`, `:id/archive`, `POST bulk_submit`, `bulk_status_update`, bulk destroy | Can't set `active`. Only the operator approves |
-| `orders` | index/show, `PATCH :id/cancel`, `:id/address`, `notes` (show/update) | Only this seller's orders |
+| `orders` | index/show, `PATCH :id/cancel`, `:id/address`, `notes` (show/update) | Only this seller's orders. `:id/address` writes a fresh address snapshot onto the order only — never the buyer's address book or defaults. Filters can't reach the buyer's `email` (no associations, see `spree-api-v3`) |
 | `orders.fulfillments` | index/show/update, `PATCH :id/fulfill`, `:id/cancel`, `:id/split` | There's **no deliver action**, because delivery confirmation belongs to the operator or the carrier feed |
 | `orders.deliveries`, `orders.labels` | nested under fulfillments | labels: `GET :id/download` |
 | `orders.returns` / `exchanges` / `claims` | index/show/create plus approve/receive/refund/fulfill/resolve/deny/cancel | |
@@ -51,7 +51,7 @@ If you build seller-side custom endpoints, keep the same shape: root every query
 |---|---|---|
 | Sellers | CRUD; `POST :id/invite`; `PATCH :id/approve` (`override_requirements`), `:id/suspend` (`reason`), `:id/reject` (`reason`), `:id/reopen_onboarding` (`note`); `GET :id/onboarding` | `sellers.create/invite/approve/suspend/reject/reopenOnboarding/onboarding` |
 | Seller ledger | `GET sellers/:id/balances`, `POST sellers/:id/payouts` (settle now) | `sellers.balances`, `sellers.settle` |
-| Seller team | `sellers/:id/team` (index/destroy), `sellers/:id/invitations` (index/destroy/resend) | Lets the operator repair a seller that locked itself out |
+| Seller team | `sellers/:id/team` (index/destroy), `sellers/:id/invitations` (index/destroy/resend, `GET :id/acceptance_link` — needs `write_sellers`) | Lets the operator repair a seller that locked itself out |
 | Requirement submissions | `sellers/:id/requirement_submissions` (index/show/create), `PATCH :id/accept`, `:id/reject` (`review_note`), `GET :id/download` | `sellers.requirementSubmissions.list/accept/reject/waive` (waive = `POST` with `requirement_id`) |
 | Checklist config | `seller_requirements` CRUD, `GET seller_requirements/types` | `sellerRequirements.types/create/update/…` |
 | Commission rates | CRUD, `GET commission_rates/rule_types` | `commissionRates.*`, `ruleTypes()` |

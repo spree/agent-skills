@@ -119,6 +119,7 @@ variant.option_value('size') # "Large" (the value's label)
 - The display field is **`label`** (translatable), not `presentation`. Query with `where(label: ...)`; API filter `q[label_cont]`.
 - `kind` ∈ `dropdown`, `color_swatch`, `buttons` (`Spree::OptionType::KINDS`).
 - Admin API: sending `option_values` on an option type **replaces the full set** — include every value you want to keep.
+- Option types are **store-owned**: a product may only use its own store's (`ProductOptionType` validates it), and variant `options: [{ name:, value: }]` match — or create — option types in the product's store only. `Spree::OptionValue.for_store(store)` scopes values through their option type.
 
 ## Product types (templates)
 
@@ -213,7 +214,7 @@ Walk this list:
 2. Owned by this store? `Spree::Product.for_store(store).exists?(product.id)`
 3. Published on the request's channel? `product.publication_for(channel)` / `Spree::Product.for_channel(channel)`; window open?
 4. Has a base price in the request currency? `product.default_variant.price_in('EUR').persisted?` — products without a price in the current currency are hidden.
-5. B2B: the buyer's catalogs may restrict the assortment (`Spree.products_for_context_service`) — see `spree-b2b`.
+5. B2B: the buyer's catalogs may restrict the assortment (`Spree.products_for_context_service`) — see `spree-b2b`. The same visible set gates anything that takes a variant from the shopper (e.g. wishlist items): a variant the listing wouldn't show is refused.
 6. Meilisearch index stale? `spree rake spree:search:reindex`.
 
 ## Search

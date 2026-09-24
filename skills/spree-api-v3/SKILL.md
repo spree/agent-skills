@@ -129,11 +129,18 @@ Lists return `{ data: [...], meta: { page, limit, count, pages, from, to, in, pr
 ### Expand and fields
 
 - `?expand=default_variant,media,variants.prices` sideloads associations; dot notation reaches nested ones. Allowed keys vary per resource (see the OpenAPI spec).
+- Admin API expansions are permission-checked per segment: `order(s)` needs `read_orders`, `payment(s)`/`payment_splits` `read_payments`, `customer(s)` `read_customers`, `gift_card(s)` `read_gift_cards`, `store_credit(s)` `read_store_credits` (so `orders.payments` needs both). A path the caller can't cover is **silently dropped**, not a 403. Gift card `code` is masked (all but the last four characters) unless the caller holds `read_gift_cards`.
 - `?fields=name,slug` returns a sparse response (`id` is always included).
 
 ### Filtering (Ransack)
 
 `q[<attr>_<predicate>]=value`, e.g. `q[name_cont]=shirt`, `q[status_eq]=placed`, `q[completed_at_gteq]=2026-09-01`. Predicates include `_eq`, `_not_eq`, `_in`, `_cont`, `_start`, `_gt`, `_gteq`, `_lt`, `_lteq`, `_present`, `_blank`. Attributes outside the model's ransack allowlist are **silently ignored**: you get 200 with that filter dropped. Allowlist them with `Spree.ransack.add_attribute(Spree::Product, :brand_id)`.
+
+The allowlists are narrowed per audience (Ransack `auth_object`: `nil` for Admin, `:store`, `:seller`):
+
+- **Store API** follows only a model's `storefront_ransackable_associations` (products: `tags`, `categories`, `collections`; empty for every other model) and drops the model's `private_ransackable_attributes[:store]` (e.g. order `email`, `considered_risky`, `coupon_code` and the `search`/`multi_search` scopes; variant `cost_price`; store credit `memo`).
+- **Seller API** follows no associations and drops `private_ransackable_attributes[:seller]` (order `email`, `considered_risky`, `coupon_code`; plus the `search`/`multi_search` scopes).
+- **Admin API** gets the full allowlist. So `Spree.ransack.add_association(Spree::Product, :brand)` makes `q[brand_name_eq]` work for staff only — to let shoppers filter through it too, add `Spree::Product.storefront_ransackable_associations |= %w[brand]` (only for associations whose data the storefront may see). Attributes added with `add_attribute` reach every audience unless listed as private.
 
 ### Addresses
 

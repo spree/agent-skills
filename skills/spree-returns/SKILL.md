@@ -76,7 +76,7 @@ result = Spree.return_create_workflow.call(
 result.success? ? result.value : result.error
 ```
 
-Creation guards (all three): the order must be completed and not canceled, items non-empty; returns/exchanges also refuse quantities above what is still returnable (units on non-canceled earlier returns count against it).
+Creation guards (all three): the order must be completed and not canceled, items non-empty; returns/exchanges also refuse quantities above what is still returnable — units on non-canceled earlier returns **and** exchanges count against each other (`Spree::Returns::ReturnableQuantity`), as do units named twice in one request. Claims are bounded the same way per line item: units already covered by `open`/`approved`/`resolved` claims can't be claimed again (denied or canceled claims free them).
 
 ## Return policy: window, overrides, custom rules
 
@@ -130,8 +130,9 @@ A delivery reporting arrival on a return's inbound parcel **never** receives the
 
 - `Returns::Refund` requires status `received`. `amount` defaults to (and is capped by) `refundable_total` — only units that actually arrived are owed (`refund_total - refunded_total`). `refund_method` is `'original_payment'` (default for returns) or `'store_credit'` (`Spree::RefundMethods::METHODS`).
 - Store credit is an internal ledger write inside the transaction (`Spree::StoreCredit`, originator = the return); gateway refunds run as an `external_step` after it, split across the order's refundable payments (`Spree::Refund` rows, originator = the return). Tax is credited through the tax provider afterwards (`refund_tax`).
+- **One refundable balance per order.** Every refund path (returns, exchanges, claims — gateway or store credit) goes through `Spree::Refunds::OrderPayments`, which locks the order and caps the amount at what its payments can still refund **minus store credit already issued against the order** (`refunded_order`). Exceeding it fails with `refund_exceeds_paid`, so two post-sale records on one order can't each pay out the full amount.
 - `refunded_total` counts refunds **and** store credits. So does the order's `payment_status`: store credit issued by a return, exchange or claim refund carries `refunded_order_id`, and the order moves to `partially_refunded` / `refunded` just like a gateway refund.
-- Exchanges: `Exchanges::Fulfill` builds replacement fulfillments (via `Spree::Stock::Coordinator`) and allocates stock. If the replacements are cheaper (`price_difference` negative) it credits the difference — `'store_credit'` by default or `'original_payment'`. If they cost more, the balance is **left for the merchant to collect** — core never silently charges a stored card.
+- Exchanges: `Exchanges::Fulfill` builds replacement fulfillments (via `Spree::Stock::Coordinator`) and allocates stock. If the replacements are cheaper (`price_difference` negative) it credits the difference **for the units actually received** (not the requested quantity) — `'store_credit'` by default or `'original_payment'`. If they cost more, the balance is **left for the merchant to collect** — core never silently charges a stored card.
 - Claims: `Claims::Resolve` with `resolution` one of `refund`, `replacement`, `refund_and_replacement` (`Spree::Claim::RESOLUTIONS`); requires `approved`. Refund defaults to `'store_credit'` and the claim total (sum of line `refund_amount`s); replacements become new fulfillments on the original order (the customer doesn't place a second order). `replacement_line_item_ids` at resolve time overrides what was flagged at creation.
 - Returns and claims update the order's `payment_status` through `Spree::Orders::UpdateStatuses`; don't write it.
 
@@ -177,6 +178,7 @@ Admin SDK: `adminClient.orders.returns.{create,approve,receive,refund,cancel}`, 
 - Staff/seller-created returns bypass the window by design. If your policy must apply to staff too, don't early-return on `created_by` in your handler.
 - `Returns::Refund` only runs from `received`; a return is refunded once. Split tenders are handled inside that one refund (it spreads across payments), not by calling it twice.
 - Exchange balances owed by the customer are not charged automatically — collect them yourself (e.g. in an `exchanges.fulfill.after_fulfill` hook or a manual payment).
+- The replacement fulfillment, its packing slip and the dashboard's Exchanges card name the **replacement** variant (`new_variant`), not the original.
 - Claims don't restock anything — nothing comes back. If goods do come back, open a return too.
 - Always scope lookups through the order/store (`order.fulfillment_items.find_by_prefix_id!`) — never `Spree::FulfillmentItem.find(params[:id])`.
 

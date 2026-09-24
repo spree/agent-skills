@@ -49,7 +49,7 @@ The Store SDK only exposes what the Store API allows. If a method doesn't typech
 | `auth`, `customers.create`, `passwordResets`, `customer.*` (profile, addresses, creditCards, giftCards, storeCredits, digitalLinks, orders, paymentSetupSessions) | Accounts |
 | `wishlists` (+ `items`) | Wishlists |
 | `newsletterSubscribers` (`create`, `verify`, `requestUnsubscribe`, `delete`) | Double opt-in newsletter |
-| `account.companies`, `companies` (+ `addresses`, `members`, `invitations`, `orders`), `companyInvitations` (`lookup`, `accept`) | B2B self-service (see `spree-b2b`) |
+| `account.companies`, `companies` (+ `addresses`, `members`, `invitations`, `orders`), `companyInvitations` (`lookup`, `accept`) | B2B self-service (see `spree-b2b`). `companies.members.create(id, { customer_email })` always returns a `CompanyInvitation` |
 
 Endpoints without a wrapper yet (e.g. `/customers/me/data_requests`, cart `tax_identifier`, `po_document`) are reachable through `client.request` (below).
 
@@ -136,6 +136,8 @@ await admin.orders.refunds.create('or_xxx', { payment_id: 'py_xxx', amount: '25.
 - **Staff JWT** (custom back-office UIs): `admin.auth.login({ email, password })` (or `{ provider, ... }`) returns `{ token, user }`, and the refresh token is set as an HttpOnly cookie. Then call `admin.setToken(token)`. `admin.auth.refresh()` takes **no token argument** (the cookie drives it). Admin JWTs expire after 5 minutes, so wire up `admin.onUnauthorized(async () => { const { token } = await admin.auth.refresh(); admin.setToken(token); return true })`. The client defaults to `credentials: 'include'`. Staff are gated by their **roles' permission keys** (403 `details.required_permission`); see `spree-auth-permissions`.
 - `admin.setStore(storeId)` sends `X-Spree-Store-Id` on multi-store hosts.
 - Full CRUD plus domain actions: `orders.complete/cancel/approve`, `products.clone/bulkStatusUpdate/bulkAddToCategories/...`, `prices.bulkUpsert`, `stockLevels.bulkUpsert`, `roles`, `permissions.list()`, `exports`, `imports`, `webhookEndpoints`, `apiKeys`, and more (see `packages/admin-sdk/src/admin-client.ts`).
+- Invitation listings carry no `acceptance_url`; fetch the link on demand with `admin.invitations.acceptanceLink(id)` (or `admin.sellers.invitations.acceptanceLink(sellerId, id)`) — write-gated. `admin.invitations.create` requires `role_id`.
+- `?expand=` of orders/payments/customers/gift cards/store credits is silently dropped when the key/staff member lacks that read permission — check scopes before assuming the API omitted data.
 - Stock is `admin.stockLevels` (`sl_…`), not `stockItems`. Addresses use `country_code` / `state_code`, not `country_iso`.
 - Products take prices as `prices: [{ currency: 'USD', amount: '29.99' }]` for simple products, or per variant.
 - Singletons use `get`: `admin.me.get()` (includes `permission_keys`), `admin.store.get()`.
@@ -165,7 +167,7 @@ export async function POST(request: Request) {
 }
 ```
 
-Subscribe to `order.placed`. `order.completed` is still sent through 6.0 as a deprecated alias (its metadata carries `deprecated_alias_of`) and is removed in 6.1. The verifier uses `node:crypto`; on Edge runtimes, implement HMAC-SHA256 over `` `${timestamp}.${rawBody}` `` with Web Crypto (see `spree-events-webhooks`). Deliveries aren't retried automatically, so make handlers idempotent on `event.id`.
+Subscribe to `order.placed`. `order.completed` is still sent through 6.0 as a deprecated alias (its metadata carries `deprecated_alias_of`) and is removed in 6.1. The verifier uses `node:crypto`; on Edge runtimes, implement HMAC-SHA256 over `` `${timestamp}.${rawBody}` `` with Web Crypto (see `spree-events-webhooks`). Failed deliveries are retried with backoff (up to 5 attempts, same `event.id`), so make handlers idempotent on `event.id`.
 
 ## Extending the SDK for custom endpoints
 

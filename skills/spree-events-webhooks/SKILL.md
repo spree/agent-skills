@@ -209,6 +209,8 @@ endpoint.secret_key // 64-char hex — returned ONLY on create; store it now
 - Endpoint IDs are `whe_…`, deliveries `whd_…`.
 - `spree_api` config: `SPREE_WEBHOOKS_ENABLED` (global kill switch), `SPREE_WEBHOOKS_VERIFY_SSL` (default on outside development).
 - Password-reset events for admin and seller users are never delivered, even to `*` endpoints.
+- `customer.password_reset_requested` carries a live reset token, so it is in `Spree::WebhookEndpoint::CREDENTIAL_EVENTS`: it reaches **only endpoints that list it by name** — never `*`, an empty subscription list, or a pattern like `customer.*`. Creating an endpoint that names it, or changing the URL/subscriptions of one that does, needs `write_customers` on top of `write_webhooks` (403 otherwise).
+- Customer records publish `user.created` / `user.updated` / `user.deleted` (plus `customer.anonymized`, `customer.password_reset*`) — there is no `customer.created`.
 
 ### Envelope + headers
 
@@ -257,9 +259,11 @@ Verify against the **raw** body (re-serialized JSON won't match), always timing-
 
 ### Failures, redelivery, auto-disable
 
-- Spree sends each delivery **once**. Non-2xx, timeouts and connection errors are recorded on the delivery (`response_code`, `response_body`, `error_type`, `request_errors`, `execution_time`) and **not retried automatically**. (`WebhookDeliveryJob` declares `retry_on`, but `DeliverWebhook` rescues transport errors, so ordinary failures never reach it.)
-- Resend manually: dashboard delivery log, `delivery.redeliver!`, `POST /api/v3/admin/webhook_endpoints/:id/deliveries/:id/redeliver`, or `admin.webhookEndpoints.deliveries.redeliver(whe, whd)`.
-- After **15 consecutive failed deliveries** (`Spree::WebhookEndpoint::AUTO_DISABLE_THRESHOLD`) the endpoint is disabled (`active: false`, `disabled_at` set) and staff get `Spree::WebhookMailer.endpoint_disabled`. Re-enable with `endpoint.enable!`, `PATCH …/webhook_endpoints/:id/enable`, or by setting `active: true` in the dashboard — all clear the disabled state.
+- A non-2xx response, timeout or connection error marks the delivery failed (`response_code`, `response_body`, `error_type`, `request_errors`, `execution_time`) and `Spree::WebhookDeliveryJob` **retries it with backoff** (`retry_on …, wait: :polynomially_longer, attempts: 5`): 5 attempts in total over roughly six minutes, each overwriting the outcome on the **same** delivery record (the log shows the latest attempt). Retries stop as soon as the endpoint is switched off (by hand or by auto-disable); an exhausted retry is not re-raised into the queue backend. Every attempt carries the same event `id` — dedupe on it.
+- Resend manually once retries are exhausted: dashboard delivery log, `delivery.redeliver!`, `POST /api/v3/admin/webhook_endpoints/:id/deliveries/:id/redeliver`, or `admin.webhookEndpoints.deliveries.redeliver(whe, whd)`.
+- After **15 consecutive failed deliveries** (`Spree::WebhookEndpoint::AUTO_DISABLE_THRESHOLD`; counted per delivery record, not per retry attempt) the endpoint is disabled (`active: false`, `disabled_at` set) and staff get `Spree::WebhookMailer.endpoint_disabled`. Re-enable with `endpoint.enable!`, `PATCH …/webhook_endpoints/:id/enable`, or by setting `active: true` in the dashboard — all clear the disabled state.
+- **The delivery log is not the wire payload.** Credentials are redacted before `spree_webhook_deliveries.payload` is written and re-attached only in memory at send time (`Spree::WebhookPayloadRedaction`): `token` (guest cart token), `reset_token`, `unsubscribe_token`, `verification_token`, `download_url`, payment-session client secrets, and a gift card's `code`. Receivers get the real values (automatic retries included); the log and Admin API show `[REDACTED]`. A manual redelivery resends the stored payload, so those fields arrive as `[REDACTED]` — don't rely on redelivering password-reset or payment-session events.
+- The Admin API returns a delivery's `payload` only when the caller can read the record the event is about (`delivery.payload_permission_key`, e.g. `read_orders` for `order.*`, `read_customers` for `customer.*`/`user.*` and any unmapped subject); otherwise `payload` is `null` and only status/response are shown.
 - If you need guaranteed delivery, make the receiver fast (ack 2xx, then queue) and reconcile periodically via the Admin API.
 
 ### Test an endpoint

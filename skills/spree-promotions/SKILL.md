@@ -55,13 +55,13 @@ spree api get "/promotion_actions/calculators?type=create_adjustment"
 ```
 
 - `kind`: `automatic` (no code, applies when rules match) or `coupon_code`. Setting a `code` flips an automatic promotion to `coupon_code`; codes are stored and matched lowercased.
-- **Multi-code (batch) promotions**: `multi_codes: true, number_of_codes: 1000, code_prefix: 'SUMMER'` generates `Spree::CouponCode` rows (large batches in a background job); each code is single-use (`unused` → `used`), `usage_limit` doesn't apply. List them with `GET /promotions/:id/coupon_codes`.
+- **Multi-code (batch) promotions**: `multi_codes: true, number_of_codes: 1000, code_prefix: 'SUMMER'` generates `Spree::CouponCode` rows (large batches in a background job); each code is single-use (`unused` → `used`), `usage_limit` doesn't apply. A code is **spent only when an order is placed with it** — applying it to a cart just holds it (`coupon_code.holder`). List them with `GET /promotions/:id/coupon_codes`.
 - Wire `type` values are the `api_type` shorthand (`item_total`, `create_item_adjustments`, `flat_rate`) — never Ruby class names.
 - Promotions are single-store (`current_store.promotions`). Outside a request set `Spree::Current.store`.
 
 ### Built-in rules
 
-`currency`, `country`, `channel`, `market`, `item_total`, `product` (any/all/none), `category` (children count; `Spree::Promotion::Rules::Taxon` is a deprecated alias), `option_value`, `user`, `customer_group`, `first_order`, `user_logged_in`, `one_use_per_user`.
+`currency`, `country`, `channel`, `market`, `item_total`, `product` (any/all/none), `category` (children count; `Spree::Promotion::Rules::Taxon` is a deprecated alias) — their `product_ids=` / `category_ids=` resolve prefixed or raw IDs through the promotion's store, so another store's record raises `RecordNotFound` (and fails validation); a custom rule that links records can reuse `ids_within_store(ids, promotion.store.products)` — `option_value`, `user`, `customer_group`, `first_order`, `user_logged_in`, `one_use_per_user`.
 
 ### Built-in actions
 
@@ -70,7 +70,7 @@ spree api get "/promotion_actions/calculators?type=create_adjustment"
 | `create_adjustment` — order discount | `:order` | `FlatPercentItemTotal` | Also `FlatRate`, `FlexiRate`, `TieredPercent`, `TieredFlatRate`. Spread over line items. |
 | `create_item_adjustments` — item discount | `:line_item` | `PercentOnLineItem` | Also `FlatRate`, `FlexiRate`. Only actionable items. |
 | `free_shipping` | `:fulfillment` | — | Row persists at zero; `order.has_free_shipping?` tests row existence. |
-| `create_line_items` — free gift | — | — | Adds items (stock-checked); not removed automatically when eligibility is lost. |
+| `create_line_items` — free gift | `:line_item` | — | Tops the cart up to the gift quantity (stock-checked) **and** writes a line-level discount covering the gifted units (only those — extra units of the same variant are paid for). Don't pair it with an order discount "to pay for the gift" — that discounts twice. Rules decide whether it applies, not which lines it pays for, and the gift itself can't satisfy the rules. A shopper already holding the variant gets it free instead of a duplicate. When the promotion stops applying, cart recalculation reverts it and takes the gift units back out (only for promotions actually joined to the cart, so a shopper's own purchase of that variant is never deleted). |
 
 **Calculators carry a currency.** `FlatRate` (and other amount-based calculators) return 0 when their `preferred_currency` doesn't match the cart — set one promotion/calculator per currency or the promotion silently does nothing for some customers.
 
@@ -81,7 +81,9 @@ const cart = await client.carts.discountCodes.apply(cart.id, 'SUMMER20', { spree
 await client.carts.discountCodes.remove(cart.id, 'SUMMER20', { spreeToken: cart.token })
 ```
 
-The code is stored on `cart.coupon_code` (and copied to `order.coupon_code`). If the cart doesn't qualify yet (e.g. below the minimum), the code **stays on the cart** with a `coupon_code_not_eligible` warning and activates on the recalculation where it first qualifies. Gift cards use their own endpoint (`carts.giftCards`) — see `spree-payments`. Server side the handler is `Spree.coupon_handler` (`Spree::PromotionHandler::Coupon`).
+The code is stored on `cart.coupon_code` (and copied to `order.coupon_code`). If the cart doesn't qualify yet (e.g. below the minimum), the code **stays on the cart** with a `coupon_code_not_eligible` warning and activates on the recalculation where it first qualifies. Gift cards use their own endpoint (`carts.giftCards`) — see `spree-payments`.
+
+Batch (single-use) codes and abandoned carts: a code held by another **open** cart is taken over by whoever presents it next (the old cart loses the discount), and whichever order is placed first keeps it. A cart already in completion (`completion_claimed?`), a completed cart and a draft order never give up a held code — the newcomer gets `coupon_code_used`, as they do when the code was spent by a placed order (or while it was being applied). Server side the handler is `Spree.coupon_handler` (`Spree::PromotionHandler::Coupon`).
 
 ## Manual discounts
 

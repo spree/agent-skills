@@ -10,7 +10,7 @@ Every event below reaches both subscribers and webhook endpoints. Payloads are t
 |---|---|
 | Order (`or_`) | lifecycle, `order.placed`, `order.paid`, `order.fulfilled`, `order.delivered`, `order.canceled`, `order.approved`, `order.resend_confirmation_email`, `order.resend_digital_links_email` |
 | Cart (`cart_`) | lifecycle only — a checked-out cart's order carries `cart_id` |
-| Order group | lifecycle, `order_group.completed` (every order of a multi-seller checkout placed) |
+| Order group | lifecycle, `order_group.completed` (every order of a multi-seller checkout placed; carries the purchase's `notify_customer` — the child `order.placed` events are sent with `notify_customer: false`, so send split-checkout confirmations from this event) |
 | Line item | lifecycle |
 
 ## Payments
@@ -54,7 +54,7 @@ Every event below reaches both subscribers and webhook endpoints. Payloads are t
 
 | Resource | Events |
 |---|---|
-| Customer (`cust_`) | `user.created`, `user.updated`, `user.deleted`, `customer.password_reset_requested`, `customer.password_reset`, `customer.anonymized` |
+| Customer (`cust_`) | `user.created`, `user.updated`, `user.deleted`, `customer.password_reset_requested` (carries the reset token — delivered only to endpoints that list it by name, never via `*`/`customer.*`), `customer.password_reset`, `customer.anonymized`. There is no `customer.created`/`updated`/`deleted` |
 | Admin / seller users | no lifecycle events; `admin_user.password_reset_requested` and `seller_user.password_reset_requested` exist but are never delivered to webhooks |
 | Wishlist, wishlist item | lifecycle |
 | Newsletter subscriber | lifecycle, `newsletter_subscriber.subscription_requested`, `.verified`, `.unsubscribe_requested` |

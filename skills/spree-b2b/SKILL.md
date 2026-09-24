@@ -24,7 +24,7 @@ Spree Enterprise only: company roles and capabilities (the OSS membership `role`
 
 - A **tree** with at most **5 levels** (`Spree::Company::MAX_DEPTH`). The root must be `kind: 'company'`. `kind` is `company` (a legal entity that can hold tax registrations) or `division` (an organizational unit that can't). Prefix: `comp_`.
 - **Membership covers the subtree.** A member of "Acme Europe" can act for every node below it. Authorization always asks "does this customer have standing on this node or any ancestor?" Memberships (`cmem_`) are always active and always tied to a real customer.
-- **Adding people by email** (Store API `POST /companies/:id/members`, or the dashboard): an existing customer becomes a member at once. An unknown email creates an invitation (`cinv_`) that **expires after 30 days**. Check the returned ID prefix to tell which happened. Invitees call `companyInvitations.lookup(token)` / `accept(token, { first_name, last_name, password })` without signing in.
+- **Adding people by email.** From the **storefront** (`client.companies.members.create(companyId, { customer_email })` → `POST /api/v3/store/companies/:id/members`) it **always** creates an invitation (`cinv_`), even for an existing customer — typing an address doesn't prove it's the person you mean, and the response doesn't reveal whether the email has an account. From **staff** (dashboard / `POST /api/v3/admin/companies/:id/memberships`, service `Spree::Companies::AddMember`) an existing customer becomes a member at once (`cmem_`) and an unknown email gets an invitation — check the ID prefix. Invitations **expire after 30 days**. Invitees call `companyInvitations.lookup(token)` / `accept(token, { first_name, last_name, password })` without signing in.
 - **Address book per company.** Each address is labeled, with default ship-to and bill-to. A delivery site is an address, not a node, so ten warehouses don't need ten companies.
 - **Tax resolves through the nearest `company` ancestor** (`company.legal_entity`). The walk **stops at the first company node even if it has no registration**, so a subsidiary never borrows its parent's VAT number. Tax identifiers and exemption certificates live on legal entities only. Read a certificate's `active`, not its status, because `active` also accounts for expiry. See `spree-taxes`.
 - Deleting a node removes its whole subtree, and **Spree refuses** if any order exists beneath it. Move a branch by updating `parent_id`.
@@ -38,6 +38,7 @@ const { data: memberships } = await client.account.companies()   // m.company.an
 
 await client.carts.update(cartId, { company_id: 'comp_xxx' })     // must be a node they have standing on
 const { data: orders } = await client.companies.orders.list('comp_xxx') // whole-subtree order history
+// other members' orders come with gift card codes masked and no digital download links — those stay with the buyer
 await client.companies.addresses.create('comp_xxx', { label: 'Northern Warehouse', /* … */ default_shipping: true })
 ```
 

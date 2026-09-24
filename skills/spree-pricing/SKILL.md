@@ -172,6 +172,8 @@ end
 - **Read-modify-write trap:** `?expand=variants.prices` returns *every* price row — base, price-list and quantity-break rows, each with `price_list_id` (`null` = base). Writing `prices` back on a variant/product treats every entry as a **base** price (and drops currencies you leave out), so posting the expanded array back overwrites the shop price with a list or ladder amount, and a null-amount membership placeholder deletes a currency. Filter to `price_list_id === null` before sending; write list prices through `/api/v3/admin/prices`. (The dashboard's product form does this filtering; your own clients must too.)
 - `min_quantity > 1` without a `price_list_id` is invalid; percentage adjustments are only allowed on catalog-owned lists.
 - Removing a catalog's pricing (`price_list: null`) or deleting the catalog soft-deletes the owned list — it never "releases" to match everyone.
+- The Store API product filter **price range** (`products.filters` → `price_range`) is computed from **base prices only** — never price-list rows (a company's contract price, a draft or scheduled list) — and is left out entirely when the channel hides prices from the caller. Don't expect it to reflect a B2B buyer's list prices.
+- Price-list writes (`Spree::PriceLists::Update`, including a catalog's inline list) silently drop variants from other stores.
 - Use promotions (`spree-promotions`) for checkout-time discounts and coupon codes; use price lists when the reduced price must show on the product page.
 
 ## Where to read further

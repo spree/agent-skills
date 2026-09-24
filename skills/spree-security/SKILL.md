@@ -51,6 +51,7 @@ The React dashboard (`@spree/dashboard`, served at `/dashboard` by `spree_dashbo
 - **Cross-origin** (dashboard on a CDN): HTTPS on both sides, **and** add the dashboard origin under **Settings → Allowed Origins** (`Spree::AllowedOrigin`, `/api/v3/admin/allowed_origins`). The starter's `config/initializers/cors.rb` consults that table for `/api/v3/admin/*` with `credentials: true`. CSRF protection for the cookie is SameSite plus the strict origin allowlist, so keep the list exact and short.
 - **Gating in the UI is not authorization.** The dashboard hides buttons based on `GET /api/v3/admin/me` permission keys, but the API gate enforces them. Any dashboard plugin action must hit an endpoint that declares `scoped_resource` (see `spree-auth-permissions`). Record-level refusals behind that gate come from `Spree.ability_class` — a custom subclass can tighten staff access further, but it never loosens the key gate, and secret keys (`Spree::ApiKeyAbility`) bypass it.
 - Staff SSO: register `OidcStrategy` and optionally remove `:email` from `Spree.admin_authentication_strategies`. Staff accounts are never auto-provisioned from the IdP.
+- Staff-management guardrails are built in (details in `spree-auth-permissions`): only an admin can grant or remove the `admin` role and a store keeps at least one admin; invitations must name a role; invitation acceptance links come from a separate write-gated endpoint (never from listings) and resending rotates the token; staff password-reset links only point at the dashboard origin; login, current-password confirmation and invitation acceptance share one lockout (`Spree::Authentication::Lockout`) — route any password check you add through it too.
 - Give every staff member their own account and a least-privilege role. Don't share an `admin@` login.
 
 ### Mission Control (`/jobs`)
@@ -63,6 +64,7 @@ The jobs UI is protected by HTTP Basic auth. In production set `MISSION_CONTROL_
 - Prefixed IDs are **not secret** (they're encodings of sequential keys). Authorize every lookup; never rely on the ID being hard to guess.
 - In custom Store controllers, read through `storefront_access_policy.scope(Model.for_store(current_store))` or through `current_user.<association>`. Never use `Model.find(params[:id])`.
 - In custom Admin controllers, use the inherited `scope` (store-scoped) and declare `scoped_resource`. Multi-store apps share one database, so `Spree::Order.find` in a controller is a cross-store leak.
+- **Every ID in a write body is a lookup too.** Resolve referenced IDs (`stock_location_id`, `reason_id`, a custom field's parent, translation targets, price-list variants, promotion rule products) through `current_store` (and the seller, on seller surfaces), and take parent records from the route, never from a query/body param. Core does this for its own endpoints; a custom controller that assigns a raw `*_id` from params reopens the cross-store hole.
 - In development and test, `Spree::StoreScopeGuard` flags `SELECT`s on store-owned tables (any `spree_*` table with `store_id`) that are neither store-scoped nor id-filtered. It watches every API v3 request **and any unit of work that assigns `Spree::Current.store`** — jobs, webhook controllers, console scripts, specs — until `Spree::Current` resets. Mode: `SPREE_STORE_SCOPE_GUARD` / `Spree::Config[:store_scope_guard]` = `log` (default), `raise` (Spree's own API suite), `off`; never active in production. Wrap a deliberately global lookup in `Spree::StoreScopeGuard.skip { … }`. Take its warnings seriously.
 
 ## Mass assignment
@@ -82,7 +84,7 @@ Never use `params.permit!`. Never permit ownership or privilege columns (`custom
 
 ## Injection and XSS
 
-- **SQL:** use parameterized `where('x > ?', v)` or hash conditions, never string interpolation. Ransack is safe because it only filters on allowlisted attributes. Unknown `q[...]` predicates are silently dropped. Expose new filters with `Spree.ransack.add_attribute(Model, :attr)`, and never allowlist secrets or digests.
+- **SQL:** use parameterized `where('x > ?', v)` or hash conditions, never string interpolation. Ransack is safe because it only filters on allowlisted attributes. Unknown `q[...]` predicates are silently dropped. Expose new filters with `Spree.ransack.add_attribute(Model, :attr)`, and never allowlist secrets or digests. Filters are a yes/no oracle, so the Store and Seller APIs get narrower allowlists than staff (`storefront_ransackable_associations`, `private_ransackable_attributes`/`private_ransackable_scopes` keyed `:store`/`:seller`); keep private data out of the storefront list when you widen it. Controllers inheriting the Store/Seller `ResourceController` pass it for you (`ransack_auth_object`); a hand-rolled query in a customer-facing controller should call `ransack(params, auth_object: :store)` itself.
 - **Rich text:** product, category, collection and seller descriptions are sanitized **on save** by `Spree::RichTextSanitizer` (via `has_spree_rich_text` / `sanitizes_rich_text`). The allowlist covers what the dashboard's Tiptap editor emits: `p br hr h1–h6 strong em s u code pre blockquote ul ol li a img`, and `data:`/`javascript:` URLs are stripped. The API returns `description` as plain text and `description_html` as sanitized markup.
   - To widen the allowlist deliberately: `Spree::RichTextSanitizer.allowed_tags += %w[table thead tbody tr th td]` in an initializer.
   - Writes that skip callbacks (`update_columns`, `update_all`, raw SQL, bulk imports that bypass models) are **not** sanitized. Call `Spree::RichTextSanitizer.sanitize(html)` yourself.
@@ -110,13 +112,15 @@ end
 1. Verify against the **raw** body bytes, before JSON parsing.
 2. Compare with a constant-time function (`ActiveSupport::SecurityUtils.secure_compare`, `crypto.timingSafeEqual`).
 3. Reject timestamps older than about 5 minutes (replay).
-4. Be idempotent. HTTP errors and timeouts are recorded on the delivery without an automatic retry, but an exception escaping `Spree::Webhooks::DeliverWebhook` makes `Spree::WebhookDeliveryJob` retry (up to 5 attempts), and a manual redelivery sends the same event again.
+4. Be idempotent. Non-2xx responses, timeouts and connection errors are retried with backoff by `Spree::WebhookDeliveryJob` (5 attempts in total, same event `id`), and a manual redelivery sends the same event again.
 
 `@spree/sdk/webhooks` exports `verifyWebhookSignature(rawBody, signature, timestamp, secret, tolerance = 300)`. See `spree-events-webhooks`.
 
 **SSRF.** Outside development, deliveries go through `SsrfFilter`, which blocks private, loopback and link-local targets. Development bypasses it so `localhost` receivers work. Don't copy `Rails.env.development?` branches into other code paths. `webhooks_verify_ssl` defaults to on outside development; leave it on. Creating webhook endpoints requires `write_webhooks`, which is deliberately separate from `settings`.
 
-**Inbound** (gateway → Spree, e.g. `/api/v3/webhooks/payments/...`): the payment provider verifies the gateway's signature and returns 401 when it's invalid. If you write a custom provider, verify the signature before acting (see `spree-providers`, `spree-payments`).
+**What `write_webhooks`/`read_webhooks` does not grant.** `customer.password_reset_requested` carries a live reset token: it reaches only endpoints that name it (never `*` or `customer.*`), and subscribing to it — or repointing an endpoint that receives it — also needs `write_customers`. The delivery log stores credentials (cart `token`, reset/verification tokens, download URLs, payment-session secrets, gift card `code`) as `[REDACTED]`, and the Admin API returns a delivery's `payload` only to callers who can read the underlying record (`null` otherwise).
+
+**Inbound** (gateway → Spree, e.g. `/api/v3/webhooks/payments/...`): the record is found by its prefixed ID alone (the request can't name a store), the request runs in that payment method's/integration's store, and the provider verifies the signature against that record's own secret — returning 401 when it's invalid. The signature is the only authentication. If you write a custom provider, verify the signature before acting (see `spree-providers`, `spree-payments`).
 
 ## Data privacy (GDPR)
 

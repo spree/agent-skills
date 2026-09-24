@@ -206,7 +206,7 @@ export function useUpdateBrand(id: string) {
 
 - `adminClient` is the configured `@spree/admin-sdk` singleton: typed resources (`adminClient.products.list/get/update…`) and `request<T>(method, path, { params, body })` with paths relative to `/api/v3/admin`. Never create a second client or use raw `fetch`.
 - Every query key must be store-scoped: `useResourceKey` in hooks, `useResourceKeyBuilder()` when ids arrive later, `withStoreScope(key, storeId)` outside React. A bare `['brands']` serves one store's rows to another after a store switch.
-- Errors are `SpreeError` (`status`, `code`, `details`). `useResourceMutation` toasts non-422 failures and stays silent on 422 so the form can show them: `catch (e) { if (!mapSpreeErrorsToForm(e, form.setError)) throw e }` (`:base` → `errors.root`). On pages without a form, pass `showValidationErrors: true`.
+- Errors are `SpreeError` (`status`, `code`, `details`). `useResourceMutation` toasts non-422 failures and stays silent on 422 so the form can show them: `catch (e) { if (!mapSpreeErrorsToForm(e, form.setError)) throw e }` (`:base` → `errors.root`). On pages without a form (a header action, a dialog-less button), pass `showValidationErrors: true` — otherwise a server refusal (422 with the reason) shows the merchant nothing.
 - Filtering, sorting or aggregating across resources belongs in a backend endpoint, not N client requests.
 - IDs are prefixed strings (`prod_…`, `or_…`, `cust_…`) everywhere — never parse or strip them.
 

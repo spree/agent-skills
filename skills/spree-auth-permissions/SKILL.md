@@ -25,6 +25,7 @@ Two rules sit under everything in this skill:
 A `Spree::Role` belongs to what it governs (`resource`: a `Spree::Store` for back-office staff, a `Spree::Seller` for a seller's team) and carries a flat list of permission keys in `permissions` (JSON array). There are no permission-set classes and no Ruby role definitions.
 
 - Keys look like `read_<resource>` / `write_<resource>`. **`write_x` implies `read_x`** (`Spree.permissions.expand_keys`).
+- **Granting and removing roles are bounded the same way.** Only a holder of the `admin` role can grant or remove `admin`; everyone else can grant or remove only roles whose keys they hold themselves; and a store always keeps at least one admin (`403` "The store must keep at least one admin."). Assigning an empty role list is a removal too.
 - Every store has one protected `admin` role meaning "everything in this store". It can't be renamed, edited or deleted, and it ignores its `permissions` list (it gets `can :manage, :all`).
 - Role names are unique per owner, so two stores can both have "Manager".
 - A role with staff or pending invitations attached can't be deleted.
@@ -61,7 +62,7 @@ Pick whichever matches how the rest of the store is managed:
 
 Unknown keys, or keys not grantable to the role's audience, fail validation — you can't save a store role holding `write_seller_profile`.
 
-To invite staff: Settings → Users → Invite, or `adminClient.invitations.create({ email, role_id })` (publishes `invitation.created`, which sends the email). To create an admin locally: `spree user create` (gets the `admin` role on the default store).
+To invite staff: Settings → Users → Invite, or `adminClient.invitations.create({ email, role_id })` (publishes `invitation.created`, which sends the email). `role_id` is **required** — an invitation never defaults to the admin role — and the caller must be allowed to grant that role. Invitation listings don't include the acceptance link (it carries the token that creates the account): fetch it on demand with `adminClient.invitations.acceptanceLink(id)` → `GET /api/v3/admin/invitations/:id/acceptance_link`, which needs `write_staff` plus the right to grant the invitation's role (sellers: `sellers.invitations.acceptanceLink(sellerId, id)` / Seller API `invitations.acceptanceLink(id)`). Resending an invitation rotates its token, so an earlier link stops working. To create an admin locally: `spree user create` (gets the `admin` role on the default store).
 
 ## The permission catalog
 
@@ -135,6 +136,8 @@ Every Admin API controller declares `scoped_resource :name`. Controllers that au
 4. Behind the gate, keys compile into CanCanCan rules for record-level checks. A 403 **without** `required_permission` means the user holds the key but a record-level rule refused the action.
 
 If a request carries both a JWT and a secret key, the JWT wins and the user's roles apply. A staff user with no role on the requested store is rejected even with a valid token.
+
+**Embedded data is gated too.** An endpoint is gated on its own key, but `?expand=` segments that pull in records of another kind are dropped unless the caller holds their read key (`orders`→`read_orders`, `payments`/`payment_splits`→`read_payments`, `customer(s)`→`read_customers`, `gift_card(s)`→`read_gift_cards`, `store_credit(s)`→`read_store_credits`), and gift card codes are masked for callers without `read_gift_cards`. In your own Admin controllers, use `holds_permission?('read_x')` (it mirrors the gate for both JWT staff and secret keys) before serializing data another permission guards.
 
 `GET /api/v3/admin/me` returns `permission_keys` (flat list) and the CanCanCan rule dump that the dashboard mirrors for UI gating. **Hiding a button in the UI is not authorization.** The API gate is the only enforcement.
 
@@ -296,6 +299,7 @@ end
 - **Register inside `Rails.application.config.after_initialize`.** Core reassigns the strategy registries in its own `after_initialize`, which wipes anything added at the top level of an initializer or in `to_prepare`. `Spree::UserIdentity` validates `provider` against the keys of the store, admin **and seller** strategy registries, so a missing registration fails on first login.
 - `access_token` / `refresh_token` passed in `tokens:` are stored on the identity and **encrypted at rest** (Active Record encryption, `support_unencrypted_data: true` so pre-encryption rows stay readable) — but only when encryption keys are configured; otherwise plaintext. See `spree-security`.
 - The third-party token is used **once**, at login. After that the client uses Spree's JWT. Don't try to accept foreign tokens on protected endpoints.
+- **Any code that checks a password must go through the lockout.** Wrap it in `Spree::Authentication::Lockout.check(user) { user.valid_password?(pw) }` → `:locked` / `:valid` / `:invalid` (misses count, a hit clears the counter; limits are `Spree::Config[:max_failed_login_attempts]` / `[:lockout_duration]`). Core uses it for login, current-password confirmation and invitation acceptance by an existing account — a password check outside it is an unthrottled guessing oracle.
 - Link by email only if the IdP guarantees `email_verified`. Linking on an unverified email lets an attacker take over the account.
 
 ## Custom user classes
@@ -318,6 +322,7 @@ Spree.admin_user_class = 'MyApp::StaffUser'
 - A staff member gets 403 with `required_permission` even though the role "looks right": check the role is on **this** store (the `X-Spree-Store-Id` / host) and the key is spelled exactly (`write_fulfillments`, not `write_shipments`).
 - A secret key 403s on `/admin_users`: that endpoint needs `read_staff`, which is not part of `settings`.
 - A custom admin controller that uses `Spree::Order.find(params[:id])` instead of the store-scoped `scope` leaks data across stores regardless of keys.
+- Staff password reset (`POST /api/v3/admin/auth/password_resets`) honors `redirect_url` only when it is on the dashboard's own origin (`Spree::Stores::DashboardUrl`) and the account is staff of that store; otherwise the email links to `<dashboard>/reset-password`. Allowed Origins don't widen this.
 - Admin/seller refresh cookies are `SameSite=None; Secure` over HTTPS. A cross-origin dashboard also needs its origin in Settings → Allowed Origins (see `spree-security`).
 
 ## Where to read further

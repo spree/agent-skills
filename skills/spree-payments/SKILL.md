@@ -59,7 +59,7 @@ In Ruby: `payment_method.resolved_capture_method`, `Spree.payment_capture_workfl
 | `type` | API sends the shorthand (`stripe`, `check`, `store_credit`, …); the column holds the class |
 | `store` | Single owner — `current_store.payment_methods` |
 | `active` | Inactive methods are hidden everywhere |
-| `storefront_visible` | `false` = staff-only (e.g. "Invoice" for admin-created orders). Replaces `display_on` |
+| `storefront_visible` | `false` = staff-only (e.g. "Invoice" for admin-created orders). Replaces `display_on`. The Store API payment and payment-session endpoints accept only `active.storefront_visible` methods — a staff-only method's ID is a 404 there, not a loophole |
 | `capture_method` | Override, see above |
 | `preferences` | Gateway credentials — YAML in a plain text column, **not encrypted**; treat DB dumps as secret |
 
@@ -94,7 +94,7 @@ const result = await client.carts.complete(cart.id, opts)
 
 Session statuses: `pending`, `processing`, `completed`, `failed`, `canceled`, `expired` (no cancel endpoint — cancel/expire come from the provider or `expires_at`).
 
-**Webhook-first completion.** The provider's webhook (`POST /api/v3/webhooks/payments/:payment_method_id`) is the authoritative signal: Spree verifies the signature synchronously (401 on failure), enqueues `Spree::Payments::HandleWebhookJob`, returns 200, then settles the payment and completes the cart via `Carts::Complete`. Whichever of browser or webhook arrives first wins; the other is a no-op. Never treat a redirect back from the provider as proof of payment.
+**Webhook-first completion.** The provider's webhook (`POST /api/v3/webhooks/payments/:payment_method_id`) is the authoritative signal: Spree finds the payment method by its prefixed ID alone (providers send no API key or store header), sets `Spree::Current.store` to the payment method's store, verifies the signature against that method's own secret synchronously (401 on failure), enqueues `Spree::Payments::HandleWebhookJob`, returns 200, then settles the payment and completes the cart via `Carts::Complete` — the job also runs in the payment method's store, so a non-default store's webhooks work without any host/header routing. Whichever of browser or webhook arrives first wins; the other is a no-op. Never treat a redirect back from the provider as proof of payment.
 
 ### Direct (Check, cash on delivery, bank transfer, PO) — `session_required? == false`
 
@@ -106,7 +106,7 @@ await client.carts.payments.create(cart.id, {
 await client.carts.complete(cart.id, opts)
 ```
 
-422 codes: `payment_session_required` (method needs a session), `payment_method_unavailable`. On completion the payment lands `pending` (or `completed` when capture is `checkout`); staff capture it when the money arrives.
+422 codes: `payment_session_required` (method needs a session), `payment_method_unavailable` (the method's `available_for_order?(cart)` is false — also checked when creating a payment session). On completion the payment lands `pending` (or `completed` when capture is `checkout`); staff capture it when the money arrives.
 
 ### Saved payment methods
 
@@ -216,7 +216,7 @@ Hooks: `refunds.create.validate`, `.before_refund`, `.after_refund`. Publishes `
 | Expiry | Never; spent oldest-first (`Spree::StoreCredit.oldest_first`) | Per card `expires_at` |
 | Statuses | — | `active`, `partially_redeemed`, `redeemed`, `canceled` (+ expired by date) |
 
-Both pay via `Spree::PaymentMethod::StoreCredit` and reduce the amount due, not the order total. Workflows: `Spree.gift_card_apply_workflow` / `gift_card_remove_workflow` / `gift_card_redeem_workflow` / `gift_card_cancel_workflow`; `Spree.store_credit_apply_service` / `store_credit_remove_service`. Cancelling a gift card is refused once it has been spent against. `Spree::StoreCreditCategory` / `StoreCreditType` are deprecated shells.
+Both pay via `Spree::PaymentMethod::StoreCredit` and reduce the amount due, not the order total. Workflows: `Spree.gift_card_apply_workflow` / `gift_card_remove_workflow` / `gift_card_redeem_workflow` / `gift_card_cancel_workflow`; `Spree.store_credit_apply_service` / `store_credit_remove_service`. Cancelling a gift card is refused once it has been spent against. A gift card's `code` is a bearer credential: Admin API responses show it in full only to callers holding `read_gift_cards` (masked to the last four characters elsewhere, e.g. on orders), the webhook delivery log stores it as `[REDACTED]`, and company members see it masked on colleagues' orders. Setting `customer_id` on a gift card through the Admin API needs `read_customers` too (403 `required_permission` otherwise). `Spree::StoreCreditCategory` / `StoreCreditType` are deprecated shells.
 
 ## Events
 

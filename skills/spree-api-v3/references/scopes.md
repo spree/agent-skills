@@ -60,3 +60,8 @@ Scopes shared with sellers (`audiences: %i[store seller]`): `dashboard`, `orders
 - **Imports** require the write key of what they import (`Spree::Import.required_scope`).
 - **Translations** resolve to the scope of the translated resource (`Spree.permissions.scope_for_resource`).
 - **Stock locations**: reading them needs `read_stock`, but creating, updating or deleting them needs `write_settings`, because they're shared store-wide.
+- **Embedded records need their own key.** `?expand=` segments naming `order(s)`, `payment(s)`/`payment_splits`, `customer(s)`, `gift_card(s)`, `store_credit(s)` are silently dropped unless the caller also holds that resource's read key (`orders.payments` needs both). Gift card `code` is masked (last four characters) without `read_gift_cards`.
+- **Gift cards**: setting `customer_id` also needs `read_customers` (403 `required_permission: read_customers`).
+- **Webhooks**: `read_webhooks` shows a delivery's `payload` only when the caller can also read the record the event is about (`payload` is `null` otherwise). Subscribing an endpoint to `customer.password_reset_requested` (or changing the URL/subscriptions of one that receives it) needs `write_customers` as well as `write_webhooks`.
+- **Invitations**: creating one needs `write_staff` plus the right to grant its role (`role_id` is required). The acceptance link (`GET /invitations/:id/acceptance_link`) is write-gated the same way; seller-team links need `write_sellers` (Admin) or `write_seller_profile` (Seller API).
+- **Role changes**: only an `admin`-role holder can grant or remove the `admin` role; others can grant or remove only roles within their own keys; a store keeps at least one admin.

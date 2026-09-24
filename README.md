@@ -66,7 +66,7 @@ Targets **Spree 6.x** (Rails 8.1). Working on Spree 5.x? Install the [`v0.3.0`](
 | `spree-dashboard` | Customizing the React admin dashboard — navigation, routes, slots, tables, forms, theming. |
 | `spree-dashboard-plugins` | Scaffolding, packaging and publishing dashboard plugins. |
 | `spree-storefront` | The Next.js storefront and `@spree/sdk`. |
-| `spree-events-webhooks` | Events, subscribers and outbound webhooks (HMAC signing, delivery, auto-disable). |
+| `spree-events-webhooks` | Events, subscribers and outbound webhooks (HMAC signing, retries with backoff, auto-disable, delivery-log redaction). |
 | `spree-i18n` | UI translations (`Spree.t` + YAML) and data translations (Mobility). |
 | `spree-testing` | RSpec + Factory Bot, `spree_dev_tools`, the API v3 shared contexts, dashboard tests. |
 | `spree-security` | Rails security + Spree-specific (secrets, encryption, webhook HMAC, data privacy, PCI). |

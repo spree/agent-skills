@@ -13,9 +13,9 @@ Packages are `1.0.0-beta.x` (Developer Preview) — names can still move between
 | Page chrome | `PageHeader`, `PageTabs`, `Slot`, `AppSidebar`, `SettingsSidebar`, `MobileTopBar`, `StoreSwitcher` |
 | Tables | `ResourceTable`, `resourceSearchSchema`, `type ResourceSearch`, `TableToolbar`, `BulkActionBar`, `filtersToRansack` |
 | Form widgets | `StoreDatePicker`, `CountryCombobox`, `CountryStateFields`, `CurrencySelect`, `LocaleSelect`, `MarketCombobox`, `ResourceCombobox`, `ResourceMultiAutocomplete`, `TagCombobox`, `PreferencesForm`, `AddressFormDialog` |
-| Permission | `Can`, `usePermissions`, `Subject`, `Action`, `type SubjectName`, `type ActionName` |
+| Permission | `Can`, `usePermissions`, `Subject`, `Action`, `type SubjectName`, `type ActionName` — customers are `'Spree::Customer'` (`Subject.Customer`); `'Spree::User'` is the pre-6.0 name the API no longer recognizes |
 | Hooks | `useAuth`, `useStore`, `useCommandPalette`, `useGlobalSearch`, `useCountries`, `useCustomFields`, `useDirectUpload`, `useExport`, `useResourceKey`, `useResourceKeyBuilder`, `useResourceMutation`, `useHostForm`, `useOptionalHostForm` |
-| Helpers | `mapSpreeErrorsToForm`, `formatPrice`, `formatStoreDateTime`, `getInitials`, `blankToNull`, `blankToUndefined`, `withStoreScope`, `resourceKey`, `i18n` |
+| Helpers | `mapSpreeErrorsToForm`, `formatPrice`, `normalizeMoneyInput(raw, locale)` (turns a typed amount into what you save — reads a lone `.`/`,` not followed by three digits as the decimal mark, so `19.50` under `de` isn't saved as 1950), `formatStoreDateTime`, `getInitials`, `blankToNull`, `blankToUndefined`, `withStoreScope`, `resourceKey`, `i18n` |
 | SDK client | `adminClient` (the configured `@spree/admin-sdk` singleton) |
 | Providers | `AuthProvider`, `PermissionProvider`, `StoreProvider` (the shell mounts these; only needed for a custom shell) |
 | Export | `ExportButton` |

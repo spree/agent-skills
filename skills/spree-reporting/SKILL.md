@@ -171,7 +171,7 @@ Rails.application.config.after_initialize do
 end
 ```
 
-The export scope is `for_store(store)` when the model supports it — keep your model store-scoped. API keys need `read_<required_scope>` (derived from the class name, e.g. `read_brands`; override `self.required_scope`).
+The export scope is `for_store(store)` when the model supports it — keep your model store-scoped. Draft orders are left out of every orders export (any model responding to `not_drafts` gets that scope), matching the Orders list. A seller-scoped export ransacks `search_params` with the `:seller` audience, so conditions on data the seller can't read (the buyer's `email`) are ignored (see `spree-api-v3`). Keep `scope_includes` to real associations — a bad preload makes every generate job fail, and with no `export.failed` event the export just never becomes `done`. API keys need `read_<required_scope>` (derived from the class name, e.g. `read_brands`; override `self.required_scope`).
 
 ## Imports
 

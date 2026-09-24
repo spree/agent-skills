@@ -157,6 +157,7 @@ Spree::LineItem.additional_permitted_attributes += [:gift_note]
 - Always `+=` (or `|=`). Never `<<` — the default is a frozen array (`FrozenError`) — and never `=`, which drops what other extensions added.
 - Put it in the model decorator's `prepended` (as above) or a `Rails.application.config.to_prepare` block, so it survives dev reloads of the engine's models.
 - API v3 controllers union this list with their own (`resource_permitted_attributes`); `Spree::PermittedAttributes` no longer exists.
+- Line items: `Spree::LineItem.additional_permitted_attributes` is the **only** thing that reaches the record through add-to-cart — sent top-level or inside `options` on `POST /carts/:id/items` (`Spree::Carts::AddItem`). Everything else in `options` is dropped, and `id`, `variant_id` and `quantity` can never be set that way (they were checked and priced already), even if you permit them.
 
 ### Make it filterable
 
@@ -167,7 +168,7 @@ Spree.ransack.add_association(Spree::Product, :brand)
 Spree.ransack.add_scope(Spree::Product, :recently_added)
 ```
 
-Without this, `q[brand_id_eq]=…` is silently dropped (200, unfiltered). See `spree-api-v3`.
+Without this, `q[brand_id_eq]=…` is silently dropped (200, unfiltered). `add_association` only widens the **Admin** API: the Store API follows just `storefront_ransackable_associations` (add `Spree::Product.storefront_ransackable_associations |= %w[brand]` in the same initializer if shoppers should filter by brand name) and the Seller API follows none. Hide a staff-only attribute from shoppers/sellers with `private_ransackable_attributes` (`{ store: [...], seller: [...] }`). See `spree-api-v3`.
 
 ## Controller decorator patterns (API v3)
 

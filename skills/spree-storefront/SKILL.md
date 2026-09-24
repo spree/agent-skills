@@ -112,7 +112,7 @@ const handler = createWebhookHandler({
     'order.placed': handleOrderPlaced,
     'order.canceled': handleOrderCanceled,
     'order.fulfilled': handleOrderFulfilled,        // or 'fulfillment.fulfilled' for per-parcel emails
-    'customer.password_reset_requested': handlePasswordReset,
+    'customer.password_reset_requested': handlePasswordReset, // must be subscribed by name — `*` never receives it
   },
   // waitUntil, toleranceSeconds optional
 })
@@ -120,8 +120,10 @@ export const POST = handler
 ```
 
 - Event names are Spree 6's: **`order.placed`** (not `order.completed`), **`order.fulfilled`** / `fulfillment.fulfilled` (not `order.shipped`). The shipped storefront code still registers `order.completed` and `order.shipped` — deprecated aliases Spree 6.0 still sends alongside the new names and stops sending in 6.1. Switch handlers **and** endpoint subscriptions to the new names.
+- Marketplace (split) checkouts: child orders publish `order.placed` with `notify_customer: false`; the purchase's confirmation belongs to `order_group.completed` — add a handler for it if you send order emails (see `spree-marketplace`).
+- When the storefront owns customer emails, turn off Spree's own with the store preference `send_consumer_transactional_emails` (false) so customers don't get two. That switch (and `notify_customer: false` on an order) only silences **customer** emails — the store's new-order notification to `new_order_notifications_email` still goes out whenever that address is set.
 - Create the endpoint in the dashboard under **Settings → Developer → Webhooks**, subscribe to the events, and copy its secret into `SPREE_WEBHOOK_SECRET`. For local testing expose the storefront (`cloudflared tunnel --url http://localhost:3001`).
-- Deliveries are not automatically retried and an endpoint is disabled after 15 consecutive failures — return 2xx quickly and do slow work in `waitUntil`/a queue. Unhandled events return 200 `{ handled: false }`.
+- Failed deliveries are retried with backoff (5 attempts over about six minutes, same event `id`), and an endpoint is disabled after 15 consecutive failed deliveries — return 2xx quickly, dedupe on `event.id`, and do slow work in `waitUntil`/a queue. Unhandled events return 200 `{ handled: false }`.
 - Outside the official storefront, use `verifyWebhookSignature(body, signature, timestamp, secret)` and `type WebhookEvent<T>` from `@spree/sdk/webhooks`. Full event list: `spree-events-webhooks`.
 
 ## Testing

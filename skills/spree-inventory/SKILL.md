@@ -21,7 +21,7 @@ Coming from 5.x (`Spree::StockItem`, stock decremented at order completion, `Spr
 | `purchasable_count` (method) | `available_count − reserved_count` | derived |
 | `backorderable` | May sell past zero | admin / API |
 
-**Placing an order does not reduce `count_on_hand`.** `Spree::Orders::Complete` allocates each fulfillment's units (`allocated` movement → `allocated_count` up). Stock physically leaves only when the fulfillment ships (`Spree::Fulfillments::Fulfill` → `shipped` movement: on hand down, allocation retired). Canceling releases the allocation (`released`). Overselling shows up as `allocated_count > count_on_hand`, never a negative shelf count. So "the website still shows 10 on hand after I sold 3" is correct — look at `available_count`.
+**Placing an order does not reduce `count_on_hand`.** `Spree::Orders::Complete` allocates each fulfillment's units (`allocated` movement → `allocated_count` up). Stock physically leaves only when the fulfillment ships (`Spree::Fulfillments::Fulfill` → `shipped` movement: on hand down, allocation retired). Canceling releases the allocation (`released`) — including units added by editing a placed order, because edits adjust the existing fulfillments in place (`Spree::OrderInventory`) instead of rebuilding them. Overselling shows up as `allocated_count > count_on_hand`, never a negative shelf count. So "the website still shows 10 on hand after I sold 3" is correct — look at `available_count`.
 
 `reserved_count` and `incoming_count` are cached counters. If they drift (manual SQL, crashed jobs), recompute them — the task also sweeps expired reservations and prints every corrected row:
 
@@ -41,7 +41,7 @@ Availability for shoppers is computed for you: Store API variants expose `in_sto
 | `kind` | `warehouse`, `store`, `fulfillment_center` (`StockLocation::KINDS`, the built-in options) |
 | address fields (`country_code`, `state_code`, `city`, `postal_code`, …) | Rates origin, proximity |
 | `backorderable_default` | Default `backorderable` for new stock levels here |
-| `propagate_all_variants` | On create, builds a stock level for every variant |
+| `propagate_all_variants` | On create, builds a stock level for every variant **of the location's store** (a seller's location: only that seller's variants); new variants get levels at such locations too |
 | `pickup_enabled` | Customers can collect here (pickup delivery methods) |
 | `returns_enabled` | Returns may be received here (see spree-returns) |
 
