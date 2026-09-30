@@ -9,7 +9,7 @@
     {
       "name": "spree",
       "source": "./",
-      "description": "Claude Code support for Spree Commerce projects \u2014 26 skills, the spree-expert subagent, two slash commands (/spree:doctor, /spree:audit-upgrade), and two safety hooks (block destructive db commands, warn on hardcoded secrets)."
+      "description": "Claude Code support for Spree Commerce 6.x projects \u2014 38 skills, the spree-expert subagent, two slash commands (/spree:doctor, /spree:audit-upgrade), and two safety hooks (block destructive db commands, warn on hardcoded secrets)."
     }
   ]
 }

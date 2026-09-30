@@ -1,121 +1,135 @@
 ---
 name: spree-upgrade
-description: Use when the user wants to upgrade Spree to a new version. Common phrasings include "upgrade Spree", "update to 5.5", "how do I upgrade", "what's the upgrade process", "we need to bump Spree", "run the Spree upgrade". Provides the spree upgrade command and the upgrade flow.
+description: Use when the user wants to upgrade Spree to a newer version, or asks how the upgrade machinery works. Common phrasings include "upgrade Spree", "bump Spree", "how do I upgrade", "what's the upgrade process", "run the Spree upgrade", "spree upgrade --plan", "rake spree:upgrade", "re-run one upgrade step", "upgrade in production / release phase". Covers the version-agnostic flow for Spree 6 projects — the `spree upgrade` CLI, the `rake spree:upgrade` task and its manifests, retrying single steps, and running backfills in production. For the Spree 5.x → 6.0 major hop, also load spree-upgrade-5-to-6.
 ---
 
 # Upgrading Spree
 
-Spree ships an upgrade flow that bundles three steps into one command:
+Every Spree upgrade is the same three stages:
 
-1. `bundle update` — bump the Spree gems in your Gemfile.lock
-2. `db:migrate` — apply migrations from the new gem version (after copying them in via `spree:install:migrations`)
-3. `bin/rake spree:upgrade` — run version-specific data backfills shipped in each release
+1. **Bump the gems** — `bundle update` the `spree*` gems.
+2. **Migrate the schema** — copy new migrations out of the gems (`spree:install:migrations`) and run `db:migrate`.
+3. **Backfill data** — `rake spree:upgrade` runs the version-specific data tasks listed in the upgrade manifests shipped inside `spree_core`.
 
-Use `spree upgrade` in development and `bundle exec rake spree:upgrade` in your deploy pipeline (production runs only the third step; bundle install + db:migrate are part of your platform's deploy flow).
+Then a fourth, manual stage: **review the upgrade guide** for your hop (behavior changes, config moves, code that needs editing). The rake-runnable part never covers everything.
 
-**Classic Rails apps** (Spree gems in a plain Rails app, no Docker/CLI — typical pre-5.4) run the same three steps natively from the app root; the CLI flags map to env vars on the rake task (`--plan` → `DRY_RUN=1`, `--step` → `STEP=<id>`, `--to` → `TO=<version>`):
+> **Going from 5.x to 6.0?** That's a major, breaking hop with preconditions (you must be on 5.6 first, Rails 8.1, Gemfile swaps, roles-as-data). Read the **spree-upgrade-5-to-6** skill before starting.
 
-```bash
-bundle update spree spree_core spree_api spree_admin spree_emails   # plus any spree_* extensions
-bin/rake spree:install:migrations && bin/rails db:migrate
-DRY_RUN=1 bin/rake spree:upgrade   # plan first
-bin/rake spree:upgrade             # then run the data backfills
-```
+## Pick your flavor
 
-`spree upgrade` requires the ejected dev stack — fresh create-spree-app projects run the prebuilt Docker image (frozen bundle, no source bind mount), so run `spree eject` first; otherwise `bundle update` fails and the copied migrations never land in `backend/db/migrate/` on your host.
-
-## See what would run (always do this first)
-
-```bash
-spree upgrade --plan
-```
-
-`--plan` walks the eligible upgrade manifests for the installed Spree version and prints every data-backfill step in order. It skips the bundle update and migration pre-steps entirely (those aren't part of the manifest). No changes happen. Read the output before running for real.
-
-If you're caught between versions or want to test against a specific target:
-
-```bash
-spree upgrade --plan --to 5.5
-```
-
-## Run the upgrade
-
-```bash
-spree upgrade
-```
-
-You'll be prompted before each interactive step (bundle update, migrations). Answer No to skip an individual step; answer Yes to run it. The data backfills (`spree:upgrade`) always run — they're the version-specific part.
-
-For CI or non-interactive use, skip the prompts:
-
-```bash
-spree upgrade --yes
-```
-
-## Run a single step
-
-After a partial failure, retry one step without re-running bundle/migrate:
-
-```bash
-spree upgrade --step channels
-```
-
-Step ids come from the manifest (printed by `--plan`).
-
-## Cap the version
-
-If you want to upgrade to an intermediate version (e.g. you're on 5.3 and want to land on 5.4 before going to 5.5):
-
-```bash
-spree upgrade --to 5.4
-```
-
-## Flag reference
-
-| Flag | Effect |
+| Project | How you run it |
 |---|---|
-| `--plan` | Print what would run; execute nothing. Always run first. |
-| `--step <id>` | Run a single step by id from the manifest (e.g. `channels`, `media`). Useful for retrying after a partial failure. |
-| `--to <version>` | Cap the upgrade at this minor version. Eligible manifests = those whose `to:` is ≤ this. |
-| `--yes` | Skip the interactive prompts. Required for CI / non-interactive runs. |
+| `create-spree-app` (Docker + `@spree/cli`, Rails app in `server/` — older projects: `backend/`) | `spree upgrade` |
+| Classic Rails app with Spree gems at the repo root (no Docker/CLI) | the native commands below |
+| Production (either flavor) | your deploy pipeline + `bundle exec rake spree:upgrade` |
 
-## What it does (and doesn't)
+### CLI (create-spree-app)
 
-### Does
-
-- Bumps every `spree*` gem in your bundle — `spree`, `spree_admin`, `spree_core`, `spree_api`, plus `spree_emails` and any installed `spree_*` extensions (`spree_stripe`, `spree_adyen`, …) — detected via `bundle list --name-only | grep '^spree'` inside the container. Extension gems get their versions bumped here, but their own upgrade steps remain manual (see "Doesn't" below).
-- Copies new migrations from the gems into `backend/db/migrate/` via `spree:install:migrations`.
-- Runs `db:migrate`.
-- Runs every eligible upgrade manifest's rake tasks, in version order. Manifests are shipped inside `spree_core` (look in `spree_core/lib/spree/upgrades/<from>_to_<to>/manifest.yml` — version dots become underscores in the directory name, e.g. `5_4_to_5_5/manifest.yml`). Each task is idempotent — re-running the full upgrade is safe.
-
-### Doesn't
-
-- **Schedule cron jobs.** Some Spree releases add jobs that need scheduling (e.g. 5.5's `Spree::StockReservations::ExpireJob`). The "Next steps" panel at the end of the upgrade reminds you; check the upgrade doc for your target version (`https://spreecommerce.org/docs/developer/upgrades/<X.Y>-to-<A.B>`).
-- **Audit your custom decorators.** When Spree moves an API surface (e.g. 5.5 moved the product↔store association off the `spree_products_stores` join table onto `Spree::Product#store_id` plus per-channel `Spree::ProductPublication` records), the upgrade can't migrate decorators that referenced the old surface. You need to read the breaking-changes section of the upgrade doc and update by hand.
-- **Run extension upgrade steps.** The bundle update bumps `spree_*` extension gems (`spree_stripe`, `spree_adyen`, etc.) along with core — but their migrations, install generators, and breaking changes are not handled. After running `spree upgrade`, check each extension's CHANGELOG and run its upgrade steps by hand.
-
-## After the upgrade
-
-The "Next steps" panel printed at the end of `spree upgrade` lists what's still manual. Don't dismiss it — the rake-runnable parts only cover ~80% of a Spree upgrade. The remaining 20% (cron jobs, decorator audits, behavior changes) is documented in the per-version upgrade guides.
-
-Read the upgrade doc for your target version:
-
-```
-https://spreecommerce.org/docs/developer/upgrades/<from>-to-<to>
+```bash
+spree upgrade --plan            # list the backfill steps a run would execute; runs nothing
+spree upgrade                   # bundle update spree* → install migrations + db:migrate → rake spree:upgrade
 ```
 
-For the manifest details, check `backend/Gemfile.lock` to see your installed version, then:
+`spree upgrade` prompts before `bundle update` and before migrations (answer No to skip one). `--yes` skips the prompts for non-interactive use. The rake backfills always run.
+
+It needs the **ejected** dev stack. Fresh projects run the prebuilt `ghcr.io/spree/spree` image with no source bind mount, so `bundle update` inside it can't touch your `server/Gemfile.lock` and copied migrations never land in `server/db/migrate/`. Run `spree eject` first (switches to the build-from-source compose), then upgrade.
+
+The CLI refuses to run in a monorepo edge project (`SPREE_PATH` set in `.env`) — use the `pnpm server:*` scripts from the monorepo root there.
+
+### Native (classic Rails app, or no CLI)
+
+```bash
+bundle update spree spree_core spree_api spree_emails   # + spree_dashboard and any spree_* extensions you use
+bin/rails spree:install:migrations db:migrate
+DRY_RUN=1 bundle exec rake spree:upgrade                  # plan
+bundle exec rake spree:upgrade                            # run the backfills
+```
+
+CLI flags map 1:1 to env vars on the rake task: `--plan` → `DRY_RUN=1`, `--step <id>` → `STEP=<id>`, `--to <x.y>` → `TO=<x.y>`.
+
+## How `rake spree:upgrade` works
+
+- Manifests live in the gem at `spree_core/lib/spree/upgrades/<from>_to_<to>/manifest.yml` (dots become underscores: `5_6_to_6_0`). Each lists ordered steps: `id`, `name`, `task` (a rake task), `notes`, and optionally `optional: true` (skipped when the task isn't defined, e.g. a provider gem you don't have).
+- A normal run walks **every manifest whose `to` is ≤ the installed minor version**, oldest first. An app that skipped a backfill two versions ago catches up automatically.
+- Every step must be **idempotent** — re-running the whole task on an already-upgraded app is a safe no-op. This is what makes it safe as a release-phase command.
+- Manifests only contain data backfills. `bundle update`, migrations, cron/recurring jobs and code changes are never in them.
+
+List what the installed gem ships:
 
 ```bash
 spree exec sh -c 'ls "$(bundle info spree_core --path)/lib/spree/upgrades/"'
+# classic: ls "$(bundle info spree_core --path)/lib/spree/upgrades/"
 ```
+
+## Plan first
+
+```bash
+spree upgrade --plan                   # or: DRY_RUN=1 bundle exec rake spree:upgrade
+```
+
+Prints every step (id, rake task, notes) that a real run would execute, in order — plan mode uses the same manifest selection as a real run (every manifest whose `to` ≤ the installed minor, or ≤ `--to` when given). Nothing is executed and the bundle/migrate pre-steps are skipped.
+
+The plan reads manifests **from the installed gem**, so bump the gems first — a 5.6 bundle doesn't contain the 5.6 → 6.0 manifest.
+
+## Retry one step
+
+After a partial failure, fix the cause and re-run only that step (skips bundle + migrate):
+
+```bash
+spree upgrade --step migrate_returns        # or: STEP=migrate_returns bundle exec rake spree:upgrade
+```
+
+Step ids come from the plan output. If the same id exists in two manifests the task aborts and asks for `TO=` to disambiguate. Some tasks take their own env knobs (`BATCH_SIZE`, `SKIP_INVALID_ROWS=true`, …) — they're documented in each step's `notes`; pass them the same way (`spree rake spree:upgrade STEP=… BATCH_SIZE=200`, or `spree exec env BATCH_SIZE=200 bin/rake …`).
+
+You can also invoke the underlying task directly — `spree rake <task>` / `bundle exec rake <task>` — which is handy for tasks that aren't in any manifest.
+
+## Cap the version
+
+```bash
+spree upgrade --to 5.6
+```
+
+Eligible manifests become those whose `to` ≤ the cap. Useful when you're landing on an intermediate minor before the next hop (5.x apps must land on 5.6 before going to 6.0).
+
+## What it does not do
+
+- **Extension upgrades.** `spree upgrade` bumps every installed `spree*` gem (it lists them with `bundle list --name-only` inside the container), but each extension's own migrations, install generators and breaking changes are yours to run — check its CHANGELOG. Extensions must have a release compatible with the target Spree version or `bundle update` won't resolve.
+- **Recurring jobs / config.** New scheduled jobs (Solid Queue `config/recurring.yml`, or your Sidekiq/cron setup), moved settings and new env vars are listed in the upgrade guide, not the manifest.
+- **Your code.** Decorators, subscribers, workflow hooks, dashboard plugins and storefront code referencing renamed or removed APIs have to be audited by hand. The `/spree:audit-upgrade` command in this plugin does a read-only readiness pass.
+- **SDKs.** Frontend packages (`@spree/sdk`, `@spree/admin-sdk`, `@spree/dashboard`) are bumped through your own package manager — the CLI prints the `apps/storefront` `@spree/sdk` version in its "Next steps" panel as a reminder.
 
 ## In production
 
-Don't run `spree upgrade` against production directly — it's a dev CLI. On production, your deploy pipeline already handles `bundle install` + `db:migrate`. The remaining piece (data backfills) is one rake invocation:
+Don't run `spree upgrade` against production — it's a dev CLI. Your deploy already does `bundle install` and `db:migrate` (the starter's Docker entrypoint runs `bin/rails db:prepare` on boot). Add the backfills as one more command:
 
 ```bash
 bundle exec rake spree:upgrade
 ```
 
-Add that as a release-phase command (Heroku), init container (K8s), auto-migrate hook (Render), or post-deploy task. The rake task is idempotent — running it on every deploy is safe.
+Wire it as a release-phase command (Heroku), pre-deploy command (Render), init container / Job (Kubernetes) or post-deploy hook (Kamal, Capistrano). Because every step is idempotent, running it on every deploy is safe and cheap once the data is migrated.
+
+Order matters: **migrate → backfill → serve new code**. Some steps are safety nets for the migration and some must run before later migrations (they say so in their notes). For big hops, run the backfills in a maintenance window or against a restored copy first to measure duration — several tasks honor `BATCH_SIZE`.
+
+## Checklist
+
+1. Back up the database.
+2. Read the upgrade guide for the hop: `node_modules/@spree/docs/dist/developer/upgrades/<from>-to-<to>.md` or https://spreecommerce.org/docs/developer/upgrades.
+3. Bump gems (and extensions), run migrations.
+4. `spree upgrade --plan` → read every step's notes.
+5. Run the backfills; re-run failed steps with `--step`.
+6. Do the manual items from the guide; run your test suite; bump SDKs.
+7. Ship with `bundle exec rake spree:upgrade` in the release phase.
+
+## Gotchas
+
+- **`--plan` printing nothing (or only old manifests)** means the gems aren't bumped yet — the plan comes from the installed `spree_core`.
+- **`bundle update` fails in the container** → you're on the prebuilt image; `spree eject` first, or the bundle is out of sync (`spree bundle install`).
+- **A step aborts on purpose.** Several 6.0 tasks refuse to continue on data they can't convert faithfully (e.g. `migrate_users_to_customers`, `migrate_returns`) and print the offending ids plus the env var that overrides. Read the message; don't blindly re-run.
+- **Never skip ahead.** Manifests assume their `from` version's schema. Jumping minors is fine (the walk catches up); skipping a required landing version (5.6 before 6.0) is not.
+
+## Where to read further
+
+- `node_modules/@spree/docs/dist/developer/upgrades/` — per-hop upgrade guides
+- `node_modules/@spree/docs/dist/developer/cli/quickstart.md` — `spree upgrade` reference
+- https://spreecommerce.org/docs/developer/upgrades
+- Related skills: **spree-upgrade-5-to-6**, **spree-cli**, **spree-deployment**, **spree-extensions**

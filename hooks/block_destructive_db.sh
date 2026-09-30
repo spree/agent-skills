@@ -27,7 +27,7 @@ command="$(echo "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || t
 [[ -z "$command" ]] && exit 0
 
 # Patterns we consider unambiguously destructive in a Spree project context.
-# Each entry is a regex (extended). Order doesn't matter; first match blocks.
+# Each entry is an extended regex, matched case-insensitively (SQL is often lowercase). Order doesn't matter; first match blocks.
 patterns=(
   # Database-level drops and resets
   # Anchored to a command position (line start, separator, subshell open, or
@@ -39,23 +39,22 @@ patterns=(
   # Raw SQL drops against Spree tables
   'DROP[[:space:]]+TABLE.*spree_'
   'DROP[[:space:]]+DATABASE'
-  'TRUNCATE.*spree_orders'
-  'TRUNCATE.*spree_payments'
-  'TRUNCATE.*spree_users'
+  # Critical tables: placed orders, in-flight checkouts (spree_carts, 6.0+),
+  # money records, customers/staff (spree_customers + spree_admin_users in
+  # 6.0; spree_users is the 5.x table and the 6.0 migration source) and keys.
+  'TRUNCATE.*spree_(orders|carts|payments|refunds|fulfillments|store_credits|gift_cards|users|customers|admin_users|api_keys)([^[:alnum:]_]|$)'
 
   # Mass deletes against critical Spree tables (raw SQL through CLI). No
   # trailing-semicolon anchor — `DELETE FROM spree_orders` is destructive
   # whether or not it's terminated; semicolon-anchoring would let unwrapped
   # SQL through.
-  'DELETE[[:space:]]+FROM[[:space:]]+spree_orders([[:space:]]|$)'
-  'DELETE[[:space:]]+FROM[[:space:]]+spree_payments([[:space:]]|$)'
-  'DELETE[[:space:]]+FROM[[:space:]]+spree_users([[:space:]]|$)'
+  'DELETE[[:space:]]+FROM[[:space:]]+spree_(orders|carts|payments|refunds|fulfillments|store_credits|gift_cards|users|customers|admin_users|api_keys)([^[:alnum:]_]|$)'
 
-  # ActiveRecord mass deletes via runner / console
-  'Spree::Order\.delete_all'
-  'Spree::Order\.destroy_all'
-  'Spree::User\.delete_all'
-  'Spree::Payment\.delete_all'
+  # ActiveRecord mass deletes via runner / console. Unconditional wipes only
+  # (including via `.all` / `.unscoped`); a scoped relation such as
+  # `.where(...).delete_all` is a deliberate, bounded delete and is allowed.
+  'Spree::(Order|Cart|Payment|Refund|Fulfillment|StoreCredit|GiftCard|User|Customer|AdminUser|ApiKey)(\.(all|unscoped))*\.(delete|destroy)_all'
+  'Spree\.(user|customer|admin_user)_class(\.(all|unscoped))*\.(delete|destroy)_all'
 
   # Force-pushes to main/master. Match both flag orderings (`--force …
   # main` and `… main --force`) by checking the components independently
@@ -67,7 +66,7 @@ patterns=(
 )
 
 for pattern in "${patterns[@]}"; do
-  if echo "$command" | grep -qE "$pattern"; then
+  if echo "$command" | grep -qiE "$pattern"; then
     cat <<EOF >&2
 🛑 Spree safety hook blocked this command:
 

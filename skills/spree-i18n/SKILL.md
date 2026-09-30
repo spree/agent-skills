@@ -1,295 +1,209 @@
 ---
 name: spree-i18n
-description: Use when the user is translating Spree — adding a new locale, translating product names/descriptions, fixing missing translations, configuring RTL languages, building a multilingual storefront, working with Mobility, or wrangling Spree.t / I18n.t key lookups. Common phrasings include "add Spanish to Spree", "translate products", "Mobility", "translation tables", "RTL", "missing translation", "Spree.t", "fallback locale", "translated columns", "translation admin". Covers both UI strings (config/locales/*.yml) and data translations (Mobility on Product, Taxon, etc.).
+description: Use when translating a Spree 6 store — adding a locale, translating product/category/collection content, fixing missing translations, building a multilingual storefront, syncing translations from a TMS via the Admin API, making a custom model translatable, working with Mobility, or wrangling `Spree.t` / dashboard i18next keys. Common phrasings include "add Spanish to Spree", "translate products", "Mobility", "translation tables", "RTL", "missing translation", "Spree.t", "fallback locale", "translated slugs", "translations API", "translate dashboard plugin", "X-Spree-Locale".
 ---
 
 # Spree I18n + Translations
 
-Two distinct translation surfaces, each with its own mechanism:
+Three separate translation surfaces:
 
 | What | Mechanism | Where it lives |
 |---|---|---|
-| **UI strings** (labels, buttons, errors, emails) | Standard Rails I18n + `Spree.t` | `config/locales/<locale>.yml` |
-| **Data** (product names, category names, descriptions) | [Mobility gem](https://github.com/shioyama/mobility) translation tables | `spree_<model>_translations` tables |
+| **Merchant content** (product names, descriptions, slugs, category names…) | [Mobility](https://github.com/shioyama/mobility) translation tables | `spree_<model>_translations` tables; edited in the dashboard or via the Admin API |
+| **Backend strings** (emails, validation errors, API error messages) | Rails I18n + `Spree.t` | `config/locales/<locale>.yml`; community `spree_i18n` gem |
+| **Dashboard UI** (the React admin) | i18next JSON bundles | `@spree/dashboard` ships `ar de en es fr pl zh-CN`; plugins register their own |
 
-You need both for a multilingual store. UI strings are about how the app speaks; data translations are about what merchant content the customer sees.
+Which locales a store offers is decided by its **Markets** (each market has `default_locale` + `supported_locales`) — see `spree-data-model` / markets docs.
 
-## UI strings — `Spree.t` and the YAML files
+## Locale resolution (Store API)
 
-Every Spree gem ships its own English locale file. `Spree.t` looks up a key scoped under `spree.*` in the active locale:
+Per request, `Spree::Api::V3::LocaleAndCurrency`:
 
-```ruby
-Spree.t(:save)                             # => "Save"
-Spree.t('i18n.this_file_language')         # => "English (US)"
-Spree.t(:paid, scope: 'payment_states')    # => "Paid"
-Spree.t(:missing_key, default: 'Fallback') # => "Fallback"
+1. Resolves the market from `X-Spree-Country`.
+2. Locale = `X-Spree-Locale` header → `?locale=` param (each honored **only** if in `current_store.supported_locales_list`) → `Spree::Current.locale` (market default → store default). Unsupported values silently fall back.
+3. Sets `I18n.locale`, `Spree::Current.locale`, and `Spree::Current.content_locale = current_store.default_locale`.
+4. Configures Mobility fallbacks via `Spree::Locales::SetFallbackLocaleForStore` — every locale falls back to the store's default locale.
+
+```ts
+const client = createClient({ baseUrl, publishableKey, locale: 'fr' })
+client.setLocale('de')
+await client.products.get('sac-spree', {}, { locale: 'fr' })  // per-request override
 ```
 
-In views / helpers, the shorthand is just `Spree.t(...)`. In ERB templates, you can also use `<%= t('.relative_key') %>` for lazy lookup based on the controller + action name (standard Rails).
+Pass exactly a code the store supports (`es`, not `es-ES` unless configured). Storefront language switchers read `GET /api/v3/store/locales`.
 
-### Adding a new UI language
-
-1. **Install the translations gem** (community-maintained):
-
-   ```ruby
-   # Gemfile
-   gem 'spree_i18n'   # ships translations for 40+ locales
-   ```
-
-   This adds `config/locales/<locale>.yml` files for every Spree gem in the bundle.
-
-2. **Add the locale to your store's supported list:**
-
-   ```ruby
-   # backend/config/initializers/spree.rb
-   I18n.available_locales = %i[en es fr de it ja]
-   I18n.default_locale = :en
-   ```
-
-3. **(Optional) Add the locale to the relevant market's supported_locales** so the storefront language switcher offers it. Locales are configured per Market, not on the store:
-
-   ```ruby
-   store = Spree::Store.default
-   store.default_market.update!(supported_locales: ['es', 'fr'])
-   ```
-
-   `supported_locales` accepts an Array or a comma-separated string; `default_locale` also lives on the market. When a store has markets (the norm — stores created with a `default_country_iso`, including seeds and the admin flow, get a default market automatically), market values take precedence: `Store#supported_locales_list` comes entirely from the markets, and `Store#default_locale` returns the default market's locale — falling back to the store column only when the market's `default_locale` is blank. With no markets at all, the store-level columns are used directly.
-
-4. **Customize keys** by overriding in your app's `config/locales/<locale>.yml` — Rails merges later-loaded locale files over earlier ones, and your app's `config/locales/` is loaded last by default.
-
-### Adding a new key
-
-If a string isn't in any locale yet:
-
-```yaml
-# config/locales/en.yml in your app
-en:
-  spree:
-    custom_feature:
-      title: "Loyalty rewards"
-      cta: "Join now"
-```
-
-```ruby
-Spree.t('custom_feature.title')   # => "Loyalty rewards"
-```
-
-Then add the same key under `es`, `fr`, etc. in matching files.
-
-### Normalizing translation keys
-
-Spree uses [`i18n-tasks`](https://github.com/glebm/i18n-tasks) to keep locale files clean. After adding keys:
-
-```bash
-bundle exec i18n-tasks normalize          # sort + dedupe
-bundle exec i18n-tasks missing            # list missing keys
-bundle exec i18n-tasks unused             # list unused keys
-bundle exec i18n-tasks health             # all of the above
-```
-
-The Spree monorepo runs `normalize` on its YAML files; if you're modifying `spree/admin/config/locales/en.yml` (the Rails admin), always normalize after.
-
-### Default + fallback
-
-```ruby
-# config/application.rb (or config/environments/production.rb)
-config.i18n.default_locale = :en
-config.i18n.fallbacks = [:en]   # missing :es key falls back to :en
-```
-
-Rails only mixes `I18n::Backend::Fallbacks` into the backend when `config.i18n.fallbacks` is set — assigning `I18n.fallbacks` directly in an initializer does not enable fallback lookups. For Mobility data translations no setup is needed: Spree configures store-based fallbacks per request via `Spree::Locales::SetFallbackLocaleForStore` (each supported locale falls back to the store's default locale).
-
-`Spree::Current.locale` is the per-request locale. The Store API resolves the per-request locale from the `x-spree-locale` header, then the `?locale=` param (each honored only if in the store's supported locales), then `Spree::Current.locale` (market default → store default).
+**Caching:** guest Store API responses set `Vary: Accept, x-spree-currency, x-spree-locale, x-spree-channel`; authenticated responses are `private, no-store`. The `Vary` list does **not** include `x-spree-country`, yet country selects the market (locale/currency fallback, market-scoped prices) — if your storefront sends it, add country to the CDN cache key yourself. A hand-rolled cache (Next.js `fetch` cache, Redis) must key on locale, currency, channel and country.
 
 ## Data translations — Mobility
 
-Spree uses [Mobility](https://github.com/shioyama/mobility) for translatable model attributes. Each model declares which fields translate:
+Translatable models declare `TRANSLATABLE_FIELDS` and include `Spree::TranslatableResource`:
+
+| Model | Fields |
+|---|---|
+| `Spree::Product` | `name`, `description`, `slug`, `meta_title`, `meta_description` |
+| `Spree::Category` | `name`, `pretty_name`, `description`, `permalink` |
+| `Spree::Collection` | `name`, `description`, `permalink` |
+| `Spree::ProductType` | `name` |
+| `Spree::OptionType`, `Spree::OptionValue` | `label` |
+| `Spree::Store` | `name`, `seo_title`, `meta_description`, `meta_keywords`, support contact fields |
+| `Spree::Policy` | `name`, `body` |
+| `Spree::Seller` | `name`, `about` |
+
+The registry is `Spree.translatable_resources` (drives the Admin API translation endpoints and dashboard translation editors). `RICH_TEXT_TRANSLATABLE_FIELDS` marks HTML fields so the dashboard shows a rich-text editor.
+
+**Custom field values** (`Spree::CustomField`) are not Mobility-translated — one value per record.
+
+### How reads resolve
+
+Every model uses `translates(*TRANSLATABLE_FIELDS, column_fallback: Spree.mobility_column_fallback)`:
+
+- The **base column** on the model table holds content in the store's default locale (`Spree::Current.content_locale`). Reading/writing in that locale hits the base column.
+- Any **other locale** reads the translation table; missing values fall back (via the store fallbacks above) to the default locale → base column. A half-translated catalog still renders.
+- `Spree::Config[:always_use_translations] = true` (env `SPREE_ALWAYS_USE_TRANSLATIONS`) disables column fallback: all locales, including the default, go through translation tables. Leave it `false` unless you have a specific reason.
 
 ```ruby
-# spree/core/app/models/spree/product.rb (paraphrased)
-class Spree::Product < Spree.base_class
-  TRANSLATABLE_FIELDS = %i[name description slug meta_description meta_title].freeze
-  translates(*TRANSLATABLE_FIELDS, column_fallback: !Spree.always_use_translations?)
-end
+Mobility.with_locale(:es) { product.name }             # translated or fallback
+product.name(locale: :es, fallback: false)             # nil if no Spanish row — detect gaps
 ```
 
-Translations are stored in **a separate per-model table** (e.g. `spree_product_translations`) keyed by a unique `(spree_product_id, locale)` index:
-
-```
-spree_product_translations
-  ├── id
-  ├── spree_product_id
-  ├── locale       ('en', 'es', 'fr', ...)
-  ├── name
-  ├── description
-  ├── slug         (also uniquely indexed per (locale, slug))
-  ├── meta_description
-  ├── meta_keywords
-  ├── meta_title
-  └── deleted_at   (paranoid; plus created_at/updated_at)
-```
-
-### Reading translations
-
-Mobility transparently returns the translated value for `I18n.locale`:
+Outside a request (console, jobs, rake) there is no store fallback configured and `content_locale` is unset. Set context first:
 
 ```ruby
-I18n.with_locale(:es) do
-  product.name   # => "Camiseta"
-end
-
-I18n.with_locale(:en) do
-  product.name   # => "T-shirt"
-end
+Spree::Current.store = store
+Spree::Current.content_locale = store.default_locale
+Spree::Locales::SetFallbackLocaleForStore.new.call(store: store)
 ```
 
-If the translation for the current locale is missing, behavior depends on `column_fallback`:
-- **`column_fallback: true` (default unless `Spree.always_use_translations?`)** — falls back to the model's own column (which holds the default-locale value).
-- **`column_fallback: false`** — skips the base column entirely; reads always hit the translation table. Note this does not mean missing translations return `nil` in practice: in request contexts (Store API and controllers), Spree configures Mobility's store-based fallbacks per request (`Spree::Locales::SetFallbackLocaleForStore`), mapping every supported locale to the store's default locale — so a missing translation returns the store-default-locale value. Reads return `nil` only outside that configuration (e.g. a bare console) or when bypassing fallbacks explicitly with `product.name(fallback: false)` — use the latter if you genuinely need to detect/hide missing translations.
-
-### Writing translations
-
-Two patterns:
+### Writing translations in Ruby
 
 ```ruby
-# Via locale block
-I18n.with_locale(:es) do
-  product.update(name: 'Camiseta', description: 'Una camiseta cómoda')
-end
-
-# Via the translation association directly
-product.translations.find_or_initialize_by(locale: 'es').update!(
-  name: 'Camiseta',
-  description: 'Una camiseta cómoda',
+product.upsert_translations(
+  'es' => { 'name' => 'Camiseta', 'description' => '<p>Una camiseta</p>' },
+  'fr' => { 'name' => 'T-shirt' }
 )
 ```
 
-### Which models translate
+`upsert_translations` semantics: absent locale/field → untouched; `""` → empty string (read falls back); `nil` → deletes that cell. Locales not in the record's store `supported_locales_list` raise `ActiveRecord::RecordInvalid`. Or write directly: `Mobility.with_locale(:es) { product.update!(name: 'Camiseta') }`.
 
-Out of the box (5.x+):
-- `Spree::Product` — name, description, slug, meta_description, meta_title
-- `Spree::Taxon` (Category) — name, pretty_name, description, permalink
-- `Spree::Taxonomy` — name
-- `Spree::OptionType` — presentation
-- `Spree::OptionValue` — presentation
-- `Spree::Store` — name, meta_description, meta_keywords, seo_title, customer_support_email, address, contact_phone
-- `Spree::Policy` — name, body
+### Translated slugs
 
-The 5.4 plan covers translating MetafieldDefinition names + Metafield text values — see `docs/plans/5.4-metafield-translations.md` if you have the monorepo.
+Product `slug` and Category/Collection `permalink` are per-locale — `/produits/sac-spree` in French. Slugs are unique within a locale, may repeat across locales. The Store API looks up the slug in the request locale and falls back to the default-locale slug. Old slugs are not auto-resolved (404) — redirect in the storefront.
 
-### Locale availability
+## Translations through the Admin API / dashboard
 
-`Spree.always_use_translations?` is set per app:
+Merchants translate in the dashboard (per-record locale switcher, plus a centralized Translations page with coverage). The same surface is available to integrations (TMS sync, AI translation jobs):
 
-```ruby
-# config/initializers/spree.rb
-Spree::Config[:always_use_translations] = false   # default — fallback to column for missing locale
-Spree::Config[:always_use_translations] = true    # never fallback — only use translation tables
-```
-
-`true` is the right choice for stores where the column value is meaningless (e.g. it's the merchant's internal admin-only string) and only translations are customer-facing. `false` is right for single-locale stores starting out.
-
-## RTL languages (Arabic, Hebrew, Persian)
-
-For RTL support:
-
-1. **Locale config:**
-   ```ruby
-   I18n.available_locales = %i[en ar he]
-   ```
-2. **Storefront direction:** storefronts are external (Next.js) apps, so RTL direction is the storefront's responsibility — set `dir="rtl"` in its own layout based on the active locale. On the Ruby side, `Spree::Locale.new(code: locale).rtl?` / `.direction` is the source of truth (there's no `i18n.dir` locale key).
-3. **Admin UI direction:** the admin flips to RTL automatically — its layouts set `dir="<%= html_dir %>"` (via `Spree::Admin::RtlHelper#html_dir` → `Spree::Locale#direction`) and the gem ships an RTL stylesheet (`_rtl.css`). RTL triggers for locales whose language code is in `Spree::Locale::RTL_LANGUAGE_CODES` (`ar he fa ur yi`); no extra setup needed.
-4. **Mobility data** works the same — you store Arabic strings in `spree_product_translations` with `locale: 'ar'`.
-
-## Storefront integration
-
-The Store API responds in the locale specified by the `X-Spree-Locale` header (or per-request `?locale=es`). Pass the exact locale code the store supports (e.g. `es`, not `es-ES`); unsupported values silently fall back to the store's default locale. Translated fields are returned in that locale; if the locale isn't available, fallback applies.
-
-```bash
-curl -H "X-Spree-Api-Key: pk_…" \
-     -H "X-Spree-Locale: es" \
-     https://my-spree.example.com/api/v3/store/products/cool-shirt
-# => { "name": "Camiseta", ... }
-```
-
-The `@spree/sdk` exposes `setLocale`:
+| Endpoint | SDK (`@spree/admin-sdk`) | Purpose |
+|---|---|---|
+| `GET /api/v3/admin/translatable_resources` | `client.translatableResources.list()` | Registry: `[{ resource_type, fields: [{ key, type }] }]` |
+| `GET /api/v3/admin/locales` | — | Store's supported locales (`code`, `name`, `default`, `rtl`) |
+| `GET /api/v3/admin/products/:id/translations` | `client.products.translations.get(id)` | Matrix: source values + per-locale translations (+ nested children, e.g. option values) |
+| `GET /api/v3/admin/<resource>/:id?expand=translations` | — | Translation matrix inline on the record |
+| `POST /api/v3/admin/translations/batch` | `client.translations.batch(entries)` | **The write surface** — atomic across records/types |
+| `GET /api/v3/admin/translations?resource_type=product` | `client.translations.coverage('product')` | Per-locale coverage grid |
 
 ```ts
-const client = createClient({ baseUrl, publishableKey, locale: 'es' })
-// or
-client.setLocale('es')
+await admin.translations.batch([
+  { resource_type: 'product', resource_id: 'prod_86Rf07xd4z',
+    values: { fr: { name: 'Sac Spree' }, de: { name: 'Spree Tasche' } } },
+  { resource_type: 'option_value', resource_id: 'optval_…', values: { de: { label: 'Klein' } } },
+])
 ```
 
-See the `spree-typescript-sdk` and `spree-api-v3` skills for more.
+`resource_type` tokens are underscored model names (`product`, `option_type`, `option_value`, `category`, `collection`, `product_type`, `store`, `policy`, `seller`). All entries succeed or none do. Secret keys need `write_<resource>` for every resource type in the batch. Translations are **not** written through `PATCH /products/:id`.
+
+Bulk CSV: `Spree::Exports::ProductTranslations` / `Spree::Imports::ProductTranslations` (dashboard import/export; see `spree-reporting`).
+
+## Making your own model translatable
+
+1. Model:
+
+   ```ruby
+   module Spree
+     class Brand < Spree.base_class
+       include Spree::TranslatableResource
+       TRANSLATABLE_FIELDS = %i[name description].freeze
+       RICH_TEXT_TRANSLATABLE_FIELDS = %i[description].freeze
+       translates(*TRANSLATABLE_FIELDS, column_fallback: Spree.mobility_column_fallback)
+     end
+   end
+   ```
+
+2. Migration for `spree_brand_translations` (`spree_brand_id`, `locale`, the fields, timestamps; unique index on `[spree_brand_id, locale]`). Keep the base columns — they hold default-locale content.
+3. Register it (initializer, after core config loads):
+
+   ```ruby
+   Rails.application.config.after_initialize do
+     Spree.translatable_resources += [Spree::Brand]
+   end
+   ```
+
+   That makes it writable through `POST /translations/batch` (`resource_type: 'brand'`). For `?expand=translations`, include `Spree::Api::V3::Admin::Translatable` in the Brand admin serializer. The nested `GET …/:id/translations` read endpoint needs its own route (core mounts it with a `:translatable` route concern on core resources).
+
+Adding a field to a **core** model: add the column to its translation table (and base table), then in a decorator redefine the frozen constant and call `translates` for the new field (never `TRANSLATABLE_FIELDS << :x` — `FrozenError`):
+
+```ruby
+module Spree::ProductDecorator
+  def self.prepended(base)
+    fields = base::TRANSLATABLE_FIELDS + [:subtitle]
+    base.send(:remove_const, :TRANSLATABLE_FIELDS)
+    base.const_set(:TRANSLATABLE_FIELDS, fields.freeze)
+    base.translates :subtitle, column_fallback: Spree.mobility_column_fallback
+  end
+  Spree::Product.prepend self
+end
+```
+
+Expose it in serializers and permitted attributes as usual.
+
+## Backend strings — `Spree.t` and YAML
+
+```ruby
+Spree.t(:save)                              # spree.save
+Spree.t(:paid, scope: 'payment_states')
+Spree.t('custom_feature.title', default: 'Rewards')
+```
+
+- Add community translations: `spree bundle add spree_i18n` (40+ locales, picked up automatically).
+- Override or add keys in your app's `config/locales/<locale>.yml` under `<locale>.spree.*` — the app's files load last.
+- Enable Rails fallbacks with `config.i18n.fallbacks = [:en]` in `config/application.rb` (setting `I18n.fallbacks` in an initializer doesn't enable the backend module). Production.rb usually has `config.i18n.fallbacks = true`.
+- `Spree::BaseMailer` configures the store's Mobility fallbacks, so translated data in emails resolves like in the API.
+- Keep YAML tidy with `i18n-tasks` (`normalize`, `missing`, `unused`).
+- Permission catalog labels for scopes you register live under `spree.permissions_catalog.resources.<name>`.
+
+## Dashboard strings — i18next
+
+The React dashboard does **not** use Rails YAML. Strings live in i18next's `translation` namespace under an `admin.` prefix. Plugins ship bundles:
+
+```ts
+import en from './locales/en.json'
+import de from './locales/de.json'
+
+export default defineDashboardPlugin({
+  locales: { en, de },                // registered before the rest of the config
+  nav: [{ key: 'brands', label: i18n.t('admin.brands.title'), path: '/brands' }],
+})
+```
+
+Conventions: `admin.fields.<resource>.<attribute>.label`; name types a backend gem registers (promotion rules, calculators, integrations…) under `admin.types.<family>.<code>` so the dashboard doesn't fall back to the Ruby label in the store's locale. See `spree-dashboard-plugins`.
+
+## RTL
+
+`Spree::Locale::RTL_LANGUAGE_CODES` = `ar he fa ur yi`; `Spree::Locale.new(code:).rtl?` / `.direction`. `GET /api/v3/admin/locales` returns `rtl`. The storefront owns its `dir="rtl"` (set it in the Next.js layout from the active locale). The dashboard ships an Arabic bundle.
 
 ## Common problems
 
-### "I see `translation missing: es.spree.…`"
-
-The key doesn't exist in the active locale. Either:
-- Add the key to `config/locales/es.yml` in your app.
-- Install `spree_i18n` gem if the missing key is a Spree-core string.
-- Add a fallback: `config.i18n.fallbacks = [:en]` in `config/application.rb` or an environment file (the standard Rails production.rb already sets `config.i18n.fallbacks = true`).
-
-### "Product name shows English even after I set Spanish"
-
-Walk this list:
-1. `I18n.locale` is actually `:es`? Add a `puts I18n.locale` in the controller to confirm.
-2. `product.translations.find_by(locale: 'es')` exists and has `name` set?
-3. `column_fallback: true` would return the English column value. Check the `translates` declaration on the model; if you want strict translations, override with `column_fallback: false` in a decorator.
-4. Mobility caching — calls in the same request memoize. Reload the product (`product.reload`) after writing translations in the same process.
-
-### "Adding a new translated field"
-
-Two steps:
-
-1. **Generate the migration** to add columns to the per-model translation table:
-   ```ruby
-   class AddCustomFieldToSpreeProductTranslations < ActiveRecord::Migration[7.2]
-     def change
-       add_column :spree_product_translations, :custom_field, :text
-     end
-   end
-   ```
-
-2. **Declare it on the model** (via decorator):
-   ```ruby
-   module Spree::ProductDecorator
-     def self.prepended(base)
-       fields = base::TRANSLATABLE_FIELDS + [:custom_field]
-       base.send(:remove_const, :TRANSLATABLE_FIELDS)
-       base.const_set(:TRANSLATABLE_FIELDS, fields.freeze)
-       base.translates :custom_field, column_fallback: !Spree.always_use_translations?
-     end
-     Spree::Product.prepend self
-   end
-   ```
-
-   (`TRANSLATABLE_FIELDS` is frozen — mutating it with `<<` raises `FrozenError`; redefine the constant instead.)
-
-   If the model also stores the field on the base table (for fallback), add a column there too.
-
-### "Storefront language switcher doesn't show my new locale"
-
-Supported locales are aggregated from the store's **markets** — the legacy `Store#supported_locales` column is only used when a store has no markets (rare; a default market is auto-created). Add the locale to a market:
-
-```ruby
-# Stores with markets (the default since Spree 5.4) derive locales from their markets:
-store.default_market.update!(supported_locales: ['en', 'es', 'fr', 'de'])
-
-# Stores without markets fall back to the legacy store-level column:
-store.update!(supported_locales: 'en,es,fr,de')
-```
-
-Switchers should read `store.supported_locales_list` (markets' locales + the store default locale). Headless storefronts fetch it via `GET /api/v3/store/locales` (`client.locales.list()` in `@spree/sdk`). If your locale isn't on any market, it's hidden even when present in `I18n.available_locales`.
-
-### "Translations admin is missing for new content"
-
-The Rails admin already ships a centralized Product Translations page: an overview grid with per-locale coverage stats at `/admin/product_translations`, plus bulk CSV export/import via `Spree::Exports::ProductTranslations` / `Spree::Imports::ProductTranslations`. Per-field editing for other translatable models (`Spree.translatable_resources`: OptionType, OptionValue, Product, Taxon, Taxonomy, Store, Policy) lives on each record's own translations page (`/admin/translations/:resource_type/:id/edit`). The plan in `docs/plans/5.4-centralized-translations-admin.md` is still marked Draft, but its core scope — the product overview grid + CSV bulk operations — has already landed; only extensions beyond products remain open.
+- **"translation missing: es.spree.…"** — add the key in your app's `config/locales/es.yml`, install `spree_i18n`, or enable `config.i18n.fallbacks`.
+- **Spanish request still returns English** — is `es` in a market's `supported_locales`? (Unsupported header values are ignored.) Does the translation row exist (`product.name(locale: :es, fallback: false)`)? Is a cache keyed without locale?
+- **Locale missing from the storefront switcher** — `store.supported_locales_list` aggregates markets' locales; add it: `market.update!(supported_locales: %w[en es fr])`. `I18n.available_locales` alone doesn't expose it.
+- **Batch write 422 "Unsupported locale(s)"** — the locale isn't in the record's store supported locales.
+- **Console shows default-locale value for every locale** — no store fallbacks / content locale set; see "How reads resolve".
+- **Stale value after writing in the same process** — `product.reload`.
 
 ## Where to read further
 
-- **Mobility gem docs:** https://github.com/shioyama/mobility — backends, fallbacks, dirty tracking.
-- **Spree docs:** `node_modules/@spree/docs/dist/developer/core-concepts/translations.md` (resource + UI translations); `node_modules/@spree/docs/dist/developer/core-concepts/markets.md` for locale/currency configuration per market.
-- **`spree_i18n` gem:** https://github.com/spree-contrib/spree_i18n — community translations.
-- **Plan files (monorepo):** `docs/plans/5.4-centralized-translations-admin.md`, `docs/plans/5.4-metafield-translations.md`.
+- `node_modules/@spree/docs/dist/developer/core-concepts/translations.md`
+- `node_modules/@spree/docs/dist/developer/core-concepts/slugs.md`
+- `node_modules/@spree/docs/dist/developer/core-concepts/markets.md`
+- `node_modules/@spree/docs/dist/developer/dashboard/customization/translations.md`
+- Mobility: https://github.com/shioyama/mobility · spree_i18n: https://github.com/spree-contrib/spree_i18n

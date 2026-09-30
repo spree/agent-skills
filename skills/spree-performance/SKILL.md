@@ -1,211 +1,144 @@
 ---
 name: spree-performance
-description: Use when the user is investigating or improving Spree performance — slow product listings, slow cart updates, search latency, image processing bottlenecks, Sidekiq queue tuning, N+1 in admin pages, cache invalidation strategies. Common phrasings include "slow PDP", "slow cart", "N+1 queries in Spree", "Sidekiq queue backlog", "search slow", "Meilisearch tuning", "image processing slow", "Spree cache". Provides the Spree-specific performance hotspots and the tools to address them.
+description: Use when investigating or improving Spree 6 performance — slow cart writes, slow checkout, slow Store API product listings, N+1 queries in custom endpoints or serializers, search latency, Meilisearch indexing floods, image processing backlogs, Solid Queue/Sidekiq queue tuning, HTTP/CDN caching of the Store API, dashboard data-fetching, or tracing with OpenTelemetry. Common phrasings include "slow cart", "add to cart is slow", "tax provider called too often", "N+1 in Spree", "slow product listing", "search slow", "Meilisearch reindex", "import is starving jobs", "jobs backlog", "queue tuning", "Spree cache", "CDN caching API", "trace a checkout", "find the slow workflow step".
 ---
 
 # Spree Performance
 
-Most Spree performance work has more leverage than generic Rails tuning because the bottleneck is usually in one of a few known hotspots. This skill covers those.
+Spree 6 is API-first: the hot paths are **Store API requests** (catalog reads, cart writes, checkout) and **background jobs**. Most wins come from a handful of known hotspots, not generic Rails tuning.
 
-## The biggest leverage areas
+## Measure first
 
-In rough order of impact for typical Spree stores:
+1. **Trace it.** Add `gem 'spree_opentelemetry'` and point `OTEL_EXPORTER_OTLP_ENDPOINT` at a collector (Jaeger locally: `docker run --rm -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:latest`). Every `Spree::Workflow` run, **each step**, hook dispatch, event subscriber dispatch, webhook delivery and gateway call gets its own span alongside SQL and HTTP spans — e.g. `carts.add_item`, `carts.complete process_payments`. This tells you *which step* is slow without guessing. Custom workflows are traced automatically.
+2. **Count queries** in a console or request spec: `ActiveRecord::Base.logger = Logger.new($stdout)` and run the workflow directly.
+3. **Production APM** (Skylight, Scout, New Relic, Datadog) all work; Datadog/Honeycomb/New Relic can also ingest the OTel traces.
 
-1. **Cart pipeline cost on every cart change.** `Spree::Cart::Recalculate` is the most-run service in the app — every line-item add, remove, and quantity change fires it. A slow recalculate makes the storefront feel sluggish.
-2. **Catalog rendering N+1s.** Product listing pages load Products, then prices, then images, then variants, then categories — easy to hit dozens of queries per product.
-3. **Search provider latency.** Database search degrades past ~10K products. Meilisearch's network round-trip + result deserialization adds up if not bounded.
-4. **Image processing.** Generating image variants is slow and CPU-bound — variants are pre-generated in background transform jobs at upload time, and bulk uploads can flood the queue.
-5. **Sidekiq queue backlog.** Per-queue weights matter — image processing flooding the `default` queue blocks event subscribers from firing in time.
-6. **Admin product table.** The N+1 problem with 100+ products and all-columns-visible is real.
+## Cart writes: the recalculation pipeline
 
-## The cart pipeline
+Cart mutations (`Spree::Carts::AddItem`, `UpsertItems`, line item updates/removals and other cart edits) run `Spree.cart_recalculate_workflow` (`Spree::Carts::Recalculate`), which:
 
-Every cart change runs `Spree.cart_recalculate_service` (default: `Spree::Cart::Recalculate`). The chain reads line items, prices, adjustments, shipments, promotions, computes totals, and writes the order back.
+1. refreshes totals via `Spree.cart_recalculate_totals_workflow` (`Spree::Carts::RecalculateTotals`),
+2. rebuilds delivery proposals (`cart.ensure_updated_fulfillments` — delivery rate providers run here),
+3. activates promotions (`set_promotion_context` hook, then `Spree::PromotionHandler::Cart`),
+4. runs `RecalculateTotals` **again** to rebuild discounts and tax,
+5. runs `after_recalculate` hook handlers.
 
-### Common cart-pipeline N+1s
+`RecalculateTotals` regenerates typed rows (`Spree::Discount`, `Spree::Fee`, `Spree::TaxLine`) and calls `cart.tax_provider.estimate(...)` each time it runs on an unplaced cart. Consequences:
 
-Each line item lazily loads its variant, then the variant's price, then the variant's images for the cart UI. Eager-load before iterating:
+- **An external tax provider is called at least twice per cart write.** Cache estimates inside your provider (key on line items, quantities, amounts, ship-to address, exemptions) and keep timeouts tight. Placed orders are money-frozen and skip regeneration.
+- **External delivery rate providers** run on every proposal rebuild — cache quotes per (address, package contents).
+- **Hook handlers** (`carts.recalculate.after_recalculate`, `carts.recalculate.set_promotion_context`, `carts.recalculate_totals.set_tax_line_context`) run on every write. Keep them query-light; push anything non-essential to an event subscriber (`cart.updated`) which runs async.
+- **Never** do network I/O inside a DB transaction. In your own workflows use `external_step` for gateway/network calls — it raises if run inside a workflow transaction and marks the span as a client call.
+- Don't add `after_save` callbacks on `Spree::LineItem`/`Spree::Cart` that recalculate — the workflow already does, and callbacks multiply the work.
 
-```ruby
-order.line_items.includes(variant: [:prices, :images, product: :categories]).each do |li|
-  # ...
-end
-```
+## Catalog reads: N+1s
 
-In a custom recalculate step, prefer batch operations over per-item loops. If you must loop, eager-load the associations the loop touches.
-
-### Sidekiq for slow recalculate work
-
-If you have a recalculate step that's slow (external service call, complex computation), make it async via Sidekiq instead of inline. The customer doesn't need to wait for an analytics push; fire-and-forget via a subscriber on `order.updated` (see the `spree-events-webhooks` skill).
-
-### Profiling the recalculate
-
-Sample any cart in the Rails console:
+The Store API's `ResourceController#collection` already chains `.includes(collection_includes).preload_associations_lazily` (ar_lazy_preload) and paginates with Pagy (default `limit` 25, max 100). The products controller explicitly includes what lazy preloading can't pick up:
 
 ```ruby
-order = Spree::Order.find(123)
-ActiveRecord::Base.logger.level = Logger::DEBUG
-Spree::Cart::Recalculate.call(order: order, line_item: order.line_items.first)
+# Spree::Api::V3::Store::ProductsController#scope_includes (abridged)
+[:seller, {
+  primary_media: [attachment_attachment: :blob, poster_attachment: :blob],
+  default_variant: [:prices, stock_levels: [:stock_location, :active_stock_reservations]],
+  variants: [:prices, :seller, stock_levels: [:stock_location, :active_stock_reservations]]
+}]
 ```
 
-Read the query log. Anything above ~50 queries for a 5-item cart is high. Anything that issues per-line-item queries is fixable with eager loading.
+When building custom endpoints or serializers, copy that shape:
 
-## Catalog rendering
-
-The classic Spree catalog page (PLP) hits N+1s by default. Spree includes `ar_lazy_preload` to mitigate, but only for paths that use it.
-
-### preload_associations_lazily
-
-`preload_associations_lazily` (from the ar_lazy_preload gem) is available on any relation — it auto-preloads whichever associations the iteration touches, with no per-model list. Spree's own controllers chain it on collections (see `Spree::Api::V3::ResourceController#collection`). Use it on custom catalog queries:
+- There is no master variant. Listings read `product.default_variant` — preload it with `:prices`.
+- `variant.price_in(currency)` uses the loaded `prices` association when present and falls back to **one query per variant** otherwise. Always preload `prices` before iterating.
+- `Spree::Media` has a default scope that includes `attachment` and `poster` blobs; preload `primary_media` for listings.
+- Add fields to a serializer → check the new associations are preloaded. In your controller, override `scope_includes` / `collection_includes` rather than calling `.includes` inline.
+- Clients should use `expand=` only for what the screen needs and `fields=` for sparse payloads — every expansion is extra loading and serialization.
 
 ```ruby
-@products = Spree::Product.for_store(current_store)
-                          .active(Spree::Current.currency)
-                          .includes(
-                            primary_media: [attachment_attachment: :blob],
-                            master: [:prices, stock_items: [:stock_location, :active_stock_reservations]],
-                            variants: [:prices, stock_items: [:stock_location, :active_stock_reservations]]
-                          )
-                          .preload_associations_lazily
-@pagy, @products = pagy(@products, page: params[:page], limit: params[:per_page])
+products = current_store.products.active
+  .includes(primary_media: [], default_variant: [:prices])
+  .preload_associations_lazily
 ```
 
-Pagination is Pagy (Spree's only pagination dependency) — the `pagy(...)` call mirrors `Spree::Api::V3::ResourceController#collection`. There is no Kaminari-style `.page` scope on Spree models.
+## HTTP caching on the Store API
 
-For the most common path (default-variant-only listing), the API's `ProductsController#scope` already does the right thing. If you're building a custom catalog endpoint, copy that pattern.
+Store catalog controllers (products, categories, collections, markets, currencies, locales, policies, sellers) include `Spree::Api::V3::HttpCaching`:
 
-### `cache_key_with_version`
+- **Guests** get `Cache-Control: public` (5 min, `stale-while-revalidate` on lists) plus an ETag; responses `Vary` on `Accept, x-spree-currency, x-spree-locale, x-spree-channel`. List ETags fold in max `updated_at`, count, `expand`, `fields`, `q`, page, limit, currency, locale and channel.
+- **Authenticated** customers get `private, no-store`.
 
-Every Spree model that's `Spree.base_class`-derived has a `cache_key_with_version` instance method (from ActiveRecord) — it folds in the model's `updated_at`. Use it for HTTP caching and fragment caching:
+So a CDN in front of the API can cache guest catalog traffic — configure it to respect `Vary`/these headers, and keep the storefront sending the `x-spree-*` headers rather than query-string variants. For your own Store API controllers, call `cache_collection(collection)` / `cache_resource(resource)` in index/show actions (both return `false` after sending a 304). Cart, checkout and account endpoints must stay uncached.
+
+`Rails.cache` is Solid Cache by default (DB-backed). It's fine for memoized lookups; switch to Redis/Valkey (`redis_cache_store`) if cache traffic becomes significant. Never cache per-customer data under shared keys.
+
+## Search
+
+- **Database provider** (`Spree::SearchProvider::Database`, default): text search is a leading-wildcard `LIKE` over product names/SKUs (plus custom fields whose definitions are marked searchable), then Ransack filters. Fine for small catalogs; degrades past roughly 10K products. `pg_trgm` is enabled by a core migration on PostgreSQL — if you add a trigram index, `EXPLAIN` the generated SQL first so the index matches the actual expression.
+- **Meilisearch** (`spree_meilisearch` gem, `Spree.search_provider = 'SpreeMeilisearch::SearchProvider'`): the right choice for medium/large catalogs and faceting.
+  - Every product create/update commit enqueues `Spree::SearchProvider::IndexJob` (queue `Spree.queues.search`, retries with backoff) per store. Bulk imports generate a flood — route `search` to its own low-priority queue, or reindex once after the import: `bin/rails spree:search:reindex` (`spree task search:reindex`).
+  - Reindex after changing index settings/presenter fields.
+
+## Images
+
+`Spree::Media` defines named webp variants from `Spree::Config.product_image_variant_sizes` (default `mini`, `small`, `medium`, `large`, `xlarge` 2000×2000, `og_image` 1200×630) with `preprocessed: true` — Active Storage enqueues transforms at upload time, so each upload costs one transform per size (for video, also per poster). Rich-text `:embed` variants are generated on first use.
+
+- Trim sizes you don't use in an initializer (must be set before models load) — fewer sizes = less CPU per upload.
+- Route transforms away from checkout-critical work (`config.active_storage.queues.transform`), and put a CDN in front of `/rails/active_storage/representations/` (see `spree-deployment`, `CDN_HOST`).
+- Don't pre-warm variants from a subscriber — the named variants already are, and ad-hoc variants have different digests.
+
+## Background jobs
+
+Spree jobs choose their queue from `Spree.queues` (defaults are all `:default`). Keys: `default`, `events`, `exports`, `images`, `imports`, `products`, `variants`, `categories`, `collections`, `stock_location_stock_levels`, `coupon_codes`, `themes`, `addresses`, `gift_cards`, `webhooks`, `payment_webhooks`, `api_keys`, `search`, `stock_reservations`, `tax_identifiers`, `data_requests`, `payouts`. Verify against `Spree.queues` in the installed `spree_core` (`lib/spree/core.rb`).
 
 ```ruby
-def show
-  product = scope.find_by_prefix_id!(params[:id])
-  fresh_when(etag: product.cache_key_with_version, last_modified: product.updated_at)
-  # render serializer
-end
+# server/config/initializers/spree.rb
+Spree.queues.payment_webhooks   = :spree_payment_webhooks
+Spree.queues.events             = :spree_events
+Spree.queues.webhooks           = :spree_webhooks
+Spree.queues.stock_reservations = :spree_stock_reservations
+Spree.queues.imports            = :spree_imports
+Spree.queues.images             = :spree_images
+Spree.queues.search             = :spree_search
+Spree.queues.categories         = :spree_categories
+Spree.queues.collections        = :spree_collections
+Spree.queues.payouts            = :spree_payouts
 ```
 
-```erb
-<% cache [product.cache_key_with_version, 'pdp'] do %>
-  <%= render 'pdp', product: product %>
-<% end %>
-```
+Use the current key names — `Spree.queues.taxons=` and `stock_location_stock_items=` are deprecated, and assigning a key Spree doesn't read (e.g. `reports`) is silently ignored.
 
-`product.touch` (or touching any has_many child that the model `belongs_to :product, touch: true` on) bumps the version and invalidates the cache.
+### Solid Queue tuning
 
-## Search provider performance
+- `config/queue.yml` polls queues **in listed order** — put checkout/payment/stock-reservation work first, bulk catalog/import/image work later, keep the trailing `"*"`.
+- In combined mode, job threads share the Puma process and GVL with web requests: raising `JOB_THREADS` there trades API latency for throughput. Once jobs matter, split to a `bin/jobs` worker (`SOLID_QUEUE_IN_PUMA=false` on web) and scale with `JOB_THREADS`/`JOB_CONCURRENCY`/replicas.
+- For isolation, define several workers in `queue.yml` — e.g. one pool for `[spree_payment_webhooks, spree_events, spree_webhooks, mailers, default]` and another for `[spree_imports, spree_images, active_storage_transform, spree_search]`.
+- CSV imports cap themselves via `SPREE_IMPORT_JOB_CONCURRENCY` (default 75% of `JOB_THREADS`) so a large import can't occupy every thread.
+- DB pool must be ≥ `RAILS_MAX_THREADS + JOB_THREADS` (+ headroom).
+- Watch backlog in Mission Control at `/jobs`.
+- **Sidekiq** is an option for very high volume — list every queue in `sidekiq.yml` with weights (no catch-all). See `spree-deployment`.
 
-### Database provider (default)
+### Event subscribers
 
-Fine for catalogs < 10K products. Past that, text search slows down: the Database provider runs `Spree::Variant.product_name_or_sku_cont`, whose predicate is `LOWER(spree_products.name) ILIKE '%q%' OR LOWER(spree_variants.sku) ILIKE '%q%'` through a variants→products join (when translations are enabled, the product translations table replaces `spree_products.name`).
+Subscribers are async by default (`Spree::Events::SubscriberJob` on `Spree.queues.events`). Use `subscribes_to 'order.placed', async: false` only for work that must happen in-request and is cheap. Heavy or network-bound side effects belong in async subscribers.
 
-If you must stay on Database:
-- `pg_trgm` is already enabled by a core migration on PostgreSQL (when the extension is available on the server)
-- Index the expressions actually queried — note the `lower(...)` wrapper; a trigram index on the bare column won't be used:
-  ```sql
-  CREATE INDEX idx_spree_products_lower_name_trgm ON spree_products USING gin (lower(name) gin_trgm_ops);
-  CREATE INDEX idx_spree_variants_lower_sku_trgm ON spree_variants USING gin (lower(sku) gin_trgm_ops);
-  ```
-- Because the OR spans two joined tables, the planner may still fall back to scans on large catalogs — that's the signal to switch to Meilisearch
-- Pass a lower `limit` query param on API requests (default 25); for the legacy storefront, lower `Spree::Config[:products_per_page]` (default 12)
+## Dashboard (React admin)
 
-### Meilisearch provider
+The dashboard uses TanStack Query (default `staleTime` 60s, `retry: 1`, no refetch on focus). In plugins:
 
-The right choice for medium-to-large catalogs.
+- Fetch through `adminClient` and pass `expand: [...]` only for data the view renders; use list `limit` and Ransack filters instead of loading everything.
+- Reuse query keys so cached data is shared across components; set a longer `staleTime` for slow-changing reference data.
+- A slow dashboard page is almost always a slow Admin API endpoint — trace it server-side.
 
-**Common Meilisearch performance issues:**
+## Common mistakes
 
-- **Indexing flood.** Every product update enqueues a `Spree::SearchProvider::IndexJob` (it runs on `Spree.queues.search`). On a bulk import this swamps Sidekiq — pause the queue, do the import, then trigger a single `bin/rake spree:search:reindex` afterwards.
-- **Synonyms / typo tolerance config drift.** Meilisearch's tolerance settings live on the index — if you change configuration code without re-running setup, results won't match expectations. The Meilisearch provider's `reindex` re-applies index settings.
-- **Result set too large.** Bound result sizes via `limit` query param; default page sizes in the API are usually right.
-
-## Image processing
-
-Spree uses ActiveStorage and pre-generates product image variants at upload time. `Spree::Asset` declares a named ActiveStorage variant per entry in `Spree::Config.product_image_variant_sizes` (defaults: mini 128, small 256, medium 400, large 720, xlarge 2000, og_image 1200×630) as webp `resize_to_fill` with `preprocessed: true`, so ActiveStorage enqueues transform jobs in the background when the image is attached — no first-request processing on the web tier. The Store API's media serializer serves exactly these named variants (`mini_url`, `small_url`, …).
-
-### Performance levers
-
-- Customize `Spree::Config.product_image_variant_sizes` in an initializer — fewer/smaller sizes means less transform work per upload (it must be set in an initializer, since the variant definitions are read when the model loads).
-- Route ActiveStorage transform jobs to a dedicated low-concurrency queue so bulk image imports don't starve customer-facing work: `config.active_storage.queues.transform = :images`, then run that queue on a separate Sidekiq worker process.
-
-Don't bother pre-warming variants from a subscriber — it duplicates the built-in behavior, and ad-hoc `resize_to_limit` variants have a different variation digest than the named webp variants, so the storefront never serves them. A pre-warming job only makes sense for custom, non-default variant transformations your own code requests.
-
-### Use a CDN
-
-ActiveStorage serves images via Rails by default. For production, route via CloudFront / Cloudflare with a long cache TTL. The Spree image URL helpers are CDN-friendly.
-
-## Sidekiq queue configuration
-
-Spree organizes background work into named queues exposed via `Spree.queues`. By default every queue is mapped to `:default`, but the names are distinct so you can route them to dedicated queues in production:
-
-```ruby
-# backend/config/initializers/spree.rb
-Spree.queues.payment_webhooks = :payment_webhooks
-Spree.queues.events           = :events
-Spree.queues.webhooks         = :webhooks
-Spree.queues.images           = :images
-Spree.queues.search           = :search
-Spree.queues.products         = :catalog
-Spree.queues.variants         = :catalog
-Spree.queues.exports          = :reports
-Spree.queues.imports          = :imports
-```
-
-Then run Sidekiq with explicit queue weights:
-
-```bash
-bundle exec sidekiq -q payment_webhooks,5 -q events,4 -q default,3 -q search,2 -q catalog,2 -q images,1
-```
-
-Why weights matter: payment webhooks must process fast (customer is waiting); image processing can lag. Without weights, image jobs flood and delay payment events.
-
-The full queue list lives in `Spree.queues` in `spree_core/lib/spree/core.rb` of the installed gem. Available: `default`, `events`, `exports`, `images`, `imports`, `products`, `reports`, `variants`, `taxons`, `stock_location_stock_items`, `coupon_codes`, `themes`, `addresses`, `gift_cards`, `webhooks`, `payment_webhooks`, `api_keys`, `search`, `stock_reservations`.
-
-## Admin product table N+1
-
-The Rails admin preloads associations in the controller, not the table registry. The base `Spree::Admin::ResourceController` chains `.includes(collection_includes)` onto the scope and applies `preload_associations_lazily` (the ar_lazy_preload gem) to the collection; `Spree::Admin::ProductsController#collection_includes` supplies the products-table preloads (media attachments, stock items, master/variant prices) that ar_lazy_preload can't pick up automatically. If a custom column triggers per-row queries, override `collection_includes` in a controller decorator to add the association. `Spree.admin.tables.products.add` only defines the column (label, type, sortable, filterable, etc.) — it accepts no `preload:` option, and passing one raises `ActiveModel::UnknownAttributeError`.
-
-## Caching patterns
-
-### Russian-doll fragment caching
-
-For the storefront, cache fragments keyed by the model's `cache_key_with_version`:
-
-```erb
-<% cache [product.cache_key_with_version, 'pdp', 'v1'] do %>
-  <%= render 'pdp', product: product %>
-<% end %>
-```
-
-Updates to the product (or any `touch:`-linked association) automatically bust the cache.
-
-### Rails.cache for expensive computations
-
-For per-store computed values (active promo banner, configured currencies, available payment methods):
-
-```ruby
-Rails.cache.fetch(['store', current_store.cache_key_with_version, 'banner'], expires_in: 5.minutes) do
-  ActiveBannerService.call(current_store)
-end
-```
-
-Don't cache anything tied to the customer (cart, account) — it varies per session and pollutes the cache.
-
-### HTTP caching on the Store API
-
-Only the Store API catalog controllers (products, categories, countries, currencies, markets, locales, policies) opt into `Spree::Api::V3::HttpCaching` — the base v3 `ResourceController` ships no-op caching hooks. For guest (unauthenticated) requests it sets a public Cache-Control (5-minute TTL by default): show actions use Rails `stale?` on the record (ETag from `cache_key_with_version`, Last-Modified from `updated_at`), while index actions get a digest ETag built from the collection's latest `updated_at`, count, and query params. Authenticated requests are sent `Cache-Control: private, no-store`, so CDNs (Cloudflare, Fastly, CloudFront) can only cache guest `/api/v3/store/products`-style traffic with conditional revalidation; guest responses `Vary` on `Accept`, `x-spree-currency`, and `x-spree-locale`.
-
-## Profiling tools
-
-- **rack-mini-profiler** — add it to the Gemfile first (it is not in spree-starter by default). Look for the badge on every page; click for the query waterfall.
-- **bullet** — detects N+1s in development. Add to the Gemfile and configure to notify on N+1.
-- **Skylight / Scout / New Relic** — production APM. All work fine with Spree out of the box.
-- **ActiveSupport::Notifications** instrumentation — Spree (via Rails) fires `sql.active_record`, `process_action.action_controller`, `cache.read`, `cache.write`. Hook into them for custom dashboards: `ActiveSupport::Notifications.subscribe('sql.active_record') { |...| ... }`.
+- Iterating variants and calling `price_in` without preloading `prices`.
+- Calling an external tax/rate API without caching — it runs several times per cart write.
+- Doing HTTP calls inside a transaction or a synchronous hook handler.
+- Leaving all `Spree.queues` on `:default` in a busy store — imports and image transforms delay payment webhooks and stock reservation expiry.
+- Serving guest catalog traffic without a CDN honoring `Vary`, or stripping the `x-spree-*` headers at the CDN.
+- Using `Spree::Product.all` in custom endpoints — scope through `current_store` and paginate.
 
 ## Where to read further
 
-- **Cart pipeline:** `Spree::Cart::Recalculate` and its dependencies in `spree_core/app/services/spree/cart/`.
-- **Search provider:** `Spree::SearchProvider::Base` and `Spree::SearchProvider::Meilisearch` in the installed `spree_core` gem.
-- **Deployment caching:** `node_modules/@spree/docs/dist/developer/deployment/caching.md`.
-- **Search + filtering:** `node_modules/@spree/docs/dist/developer/core-concepts/search-filtering.md`.
+- `node_modules/@spree/docs/dist/developer/providers/observability.md` — spans, sampling, span metrics
+- `node_modules/@spree/docs/dist/developer/deployment/background_jobs.md`, `caching.md`, `cdn.md`
+- `node_modules/@spree/docs/dist/developer/core-concepts/search-filtering.md`
+- Source: `Spree::Carts::Recalculate` / `RecalculateTotals` (`spree_core/app/workflows/spree/carts/`), `Spree::Api::V3::HttpCaching`, `Spree::Api::V3::ResourceController`
+- Related skills: `spree-workflows`, `spree-order-totals`, `spree-taxes`, `spree-deployment`, `spree-events-webhooks`
