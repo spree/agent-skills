@@ -24,6 +24,8 @@ Spree 6 connects external systems through **provider contracts**: a base class y
 | Credentials for any of the above | `Spree::Integration` | `Spree.integrations << 'My::Integration'` ⚠ after_initialize | Per store, Settings → Integrations | — |
 | Observability | — (gem) | `gem 'spree_opentelemetry'` + `OTEL_*` env | — | dormant |
 
+**Transactional email is not a provider.** Spree sends it over plain SMTP configured by `SMTP_*` env vars for the whole deployment, not per store in the admin, and there's no provider gem to install. Any SMTP service works (Resend, Postmark, SendGrid, Mailgun and Amazon SES have setup guides). Use the STARTTLS port (587); an implicit-TLS port such as 465 won't connect. Spree doesn't process bounces or complaints, so handle those with the provider's own webhooks. See `spree-deployment`.
+
 Related plug-in points that are not "providers" but work the same way: `Spree.order_routing.rules` / `.strategies` (base `Spree::OrderRoutingRule`, `Spree::OrderRouting::Strategy::Base`), `Spree.stock_splitters` ⚠, `Spree.number_generators[:order] = 'My::Numbers'`, `Spree.promotions.rules` / `.actions` ⚠, `Spree.adjusters` ⚠, `Spree.tracking_carriers['my_courier'] = { name:, url: }` ⚠. See `spree-fulfillment`, `spree-promotions`, `spree-order-totals`.
 
 **Coming soon (roadmap, interfaces may change):** ERP inventory sync, PIM pricing feeds, externally hosted DAM media. Core already ships `Spree::PricingProvider::Base` / `Spree::InventoryProvider::Base` with `Spree.pricing_providers` / `Spree.inventory_providers` and store preferences `pricing_provider` / `inventory_provider` (default `'internal'`), but the docs mark them roadmap — don't build production integrations on them without checking the current source.

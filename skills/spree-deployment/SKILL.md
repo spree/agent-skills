@@ -50,7 +50,7 @@ Strictly required: `DATABASE_URL`, `SECRET_KEY_BASE`. Practically required: `RAI
 | `JOB_THREADS` / `JOB_CONCURRENCY` | Worker threads (default 3) / worker processes (default 1) |
 | `SPREE_IMPORT_JOB_CONCURRENCY` | Cap on concurrent CSV import group jobs (default 75% of `JOB_THREADS`, min 1; `0` = no cap) |
 | `MISSION_CONTROL_USER` / `MISSION_CONTROL_PASSWORD` | HTTP Basic auth for `/jobs`. Unset in production → dashboard locked |
-| `SMTP_HOST` (+ `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`) | Without `SMTP_HOST`, production sends no email |
+| `SMTP_HOST` (+ `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`) | Without `SMTP_HOST`, production sends no email. Any SMTP provider works, with nothing to install. STARTTLS is always attempted, so use port 587, not an implicit-TLS 465. Auth is `plain`, sent only when `SMTP_USERNAME` is set. Merchants override From/Reply-To per store in Settings → Emails |
 | `AWS_*` or `CLOUDFLARE_*` | Object storage for uploads — required on ephemeral filesystems |
 | `RAILS_FORCE_SSL` / `RAILS_ASSUME_SSL` | Both default `true` (behind a TLS-terminating proxy). Set both `false` only when there is no TLS anywhere |
 | `SENTRY_DSN`, `OTEL_*`, `MEILISEARCH_URL` | Optional integrations (below) |

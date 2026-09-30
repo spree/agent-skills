@@ -12,9 +12,15 @@ description: Use when the user is building a TypeScript or JavaScript client aga
 | `@spree/seller-sdk` | Seller API (`/api/v3/seller`) | Seller JWT + seller ID (`createSellerClient`, `setSeller`) | 1.x beta. Singletons use `get`/`update` like the admin SDK (`seller.me.get()`, `seller.me.update({ selected_locale })`, `seller.profile.update(…)`). See `spree-marketplace` |
 | `@spree/sdk-core` | Shared HTTP, retry, errors | — | Internal, never published. Don't import it |
 
-All three expose the same shape and share `SpreeError`, retry, idempotency and a `request` escape hatch. They target Spree 6. Spree 6 storefronts need `@spree/sdk` 2.x. Pre-release versions may need an explicit version or dist-tag when installing, so check npm.
+All three expose the same shape and share `SpreeError`, retry, idempotency and a `request` escape hatch. They target Spree 6. Spree 6 storefronts need `@spree/sdk` 2.x. Until 6.0 is final the SDKs and dashboard packages are published as prereleases on npm's `beta` dist-tag (`pnpm add @spree/sdk@beta`), while `@spree/cli` and `create-spree-app` are stable (3.1.0 / 2.1.0 alongside gems 6.0.0.beta4).
 
-`@spree/sdk` also ships `@spree/sdk/types` (generated types), `@spree/sdk/zod` (Zod schemas) and `@spree/sdk/webhooks` (signature verification, Node only).
+`@spree/sdk` also ships `@spree/sdk/types` (generated types), `@spree/sdk/zod` (Zod schemas) and `@spree/sdk/webhooks` (signature verification, Node only). The Admin and Seller SDKs have matching `/types` and, from the release after `1.0.0-beta.3`, `/zod` subpaths (`@spree/admin-sdk/zod`, `@spree/seller-sdk/zod`). If the subpath doesn't resolve, the installed version predates it. Schemas are named `<Type>Schema` and generated from the API serializers. `zod` (>= 3) is an optional peer dependency, so install it yourself to validate responses at runtime:
+
+```typescript
+import { OrderSchema } from '@spree/admin-sdk/zod'
+
+const order = OrderSchema.parse(await adminClient.orders.get('or_xxx'))  // throws on a shape mismatch
+```
 
 ## @spree/sdk — Store API
 

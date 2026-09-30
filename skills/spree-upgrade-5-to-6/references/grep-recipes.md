@@ -45,6 +45,12 @@ grep -rnE "<pattern>" app config lib spec
 | `ship_total` | Deprecated | `delivery_total` |
 | `item_count` | Deprecated | `total_quantity` |
 | `shipping_discount` | Deprecated | `fulfillment_discount` |
+| `shipment_total`, `display_shipment_total`, `display_ship_total`, `display_promo_total` | Deprecated | `delivery_total`, `display_delivery_total`, `display_discount_total` |
+| `available_payment_methods`, `collect_payment_methods`, `collect_frontend_payment_methods` | Deprecated | `payment_methods` (never includes store credit) |
+| `associate_user!`, `.user`, `.user_id` on carts/orders | Deprecated | `associate_customer!`, `customer`, `customer_id` |
+| `set_shipments_cost`, `ensure_updated_shipments`, `update_with_updater!`, `all_line_items` | Deprecated | `set_fulfillments_cost`, `ensure_updated_fulfillments`, `recalculate_totals!`, `line_items` |
+
+The deprecated order names in this table (not the removed adjustment API), plus `delivery_required?` / `requires_ship_address?` / `create_proposed_*` / `special_instructions` below is answered by **`Spree::Cart` as well as `Spree::Order`** (`Spree::Purchase::DeprecatedAliases`). 5.x extensions, payment gateway gems especially, call them on what is now a cart. They warn rather than crash until 6.1, so grep your gems' code for them too.
 | `private_metadata['typed_adjustments_frozen']` | — | read `metadata['typed_adjustments_frozen']` to find orders the migration refused to convert |
 
 ## Catalog, prices, media

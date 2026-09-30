@@ -133,7 +133,7 @@ Spree.permissions.register_scope(:reviews, group: :catalog, resources: -> { [Spr
 Spree.hooks.register('products.activate.validate', 'SpreeReviews::RequireDescription')
 
 Rails.application.config.after_initialize do
-  Spree.subscribers << SpreeReviews::ReviewRequestSubscriber   # `bin/rails g spree:subscriber` adds these lines
+  Spree.subscribers << SpreeReviews::ReviewRequestSubscriber   # `bin/rails g spree:subscriber` adds these; pass the class — a String crashed production boot through 6.0.0.beta4
   Spree.integrations << 'SpreeReviews::Integration'            # if the gem needs per-store credentials
 end
 ```

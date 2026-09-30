@@ -79,6 +79,8 @@ end
 
 Subscribers are **not** auto-discovered. An unregistered subscriber is a silent no-op.
 
+Register the class constant. A class-name String (`'OrderPlacedSubscriber'`) is also accepted and resolved when subscribers are registered at boot, but through 6.0.0.beta4 a String only resolved in development and test. In production it crashed boot with `NoMethodError: undefined method 'subscription_patterns' for String`, a failure your specs can't catch.
+
 ```ruby
 # app/subscribers/order_placed_subscriber.rb
 class OrderPlacedSubscriber < Spree::Subscriber

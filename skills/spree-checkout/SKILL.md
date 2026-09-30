@@ -235,7 +235,7 @@ if (cart.requirements.length) { /* route the user by requirements[0].step / code
 const result = await client.carts.complete(cart.id, opts)  // Order | OrderGroup — narrow with isOrderGroup from @spree/sdk
 ```
 
-Every write returns the whole cart with fresh totals and `requirements` — never make a separate "recalculate" call. Discount codes, gift cards and store credit (`carts.discountCodes`, `carts.giftCards`, `carts.storeCredits`) can be applied any time before completion.
+Every write returns the whole cart with fresh totals and `requirements` — never make a separate "recalculate" call. Discount codes, gift cards and store credit (`carts.discountCodes`, `carts.giftCards`, `carts.storeCredits`) can be applied any time before completion. Store credit is applied through its own endpoint and is never one of `cart.payment_methods`. A cart takes a gift card or store credit, not both. A gift card's share follows the total when delivery, discounts or tax change.
 
 ## Login: associate and merge
 
@@ -253,9 +253,10 @@ Every write returns the whole cart with fresh totals and `requirements` — neve
 1. **Read `cart.requirements`** (`spree console`: `Spree::Checkout::Requirements.new(cart).call(completion: true)`). The completion-only set adds stock/discontinued/quantity-rule/guest-policy failures.
 2. `completion_in_progress` / `409` → another attempt holds `completing_at` (TTL 5 min). Retry; don't clear it by hand while a payment may be in flight.
 3. `payment_required` though the customer paid → a gift card or store credit was removed: **any item change runs `Spree::Carts::Recalculate`, which unapplies gift cards and checkout store credit**. Re-apply after editing items.
-4. `delivery_method_required` with no rates → the address has no matching delivery zone; `cart.warnings` carries `delivery_unavailable` per item.
-5. A custom requirement never clears → your `satisfied:` lambda reads data the storefront never writes (e.g. `custom_fields` on a cart — use `metadata`).
-6. Rejected by a hook → the error message comes from `workflow.reject!` / `workflow.errors` in some `carts.complete.validate` handler; `Spree.hooks.keys` lists registrations.
+4. `coupon_code_unavailable` → the cart no longer holds its single-use batch code (another cart took it over, or an order used it). The next cart read drops it with a warning; the shopper re-reviews the total (see `spree-promotions`).
+5. `delivery_method_required` with no rates → the address has no matching delivery zone; `cart.warnings` carries `delivery_unavailable` per item.
+6. A custom requirement never clears → your `satisfied:` lambda reads data the storefront never writes (e.g. `custom_fields` on a cart — use `metadata`).
+7. Rejected by a hook → the error message comes from `workflow.reject!` / `workflow.errors` in some `carts.complete.validate` handler; `Spree.hooks.keys` lists registrations.
 
 ## Testing
 

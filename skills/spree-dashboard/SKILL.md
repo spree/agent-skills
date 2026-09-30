@@ -19,7 +19,7 @@ my-store/
     │   ├── src/main.tsx        # mounts <Dashboard>, imports plugins + virtual:spree-dashboard-plugins
     │   ├── src/plugins.ts      # ← your registrations
     │   ├── src/styles.css      # @import "@spree/dashboard/styles.css" + your token overrides
-    │   ├── src/routeTree.gen.ts  # generated on every dev start/build — commit it
+    │   ├── src/routeTree.gen.ts  # generated on every dev start/build (and by `spree add`) — commit it
     │   └── vite.config.ts      # spreeDashboardPlugin() + /api proxy
     └── seller-dashboard/   # optional marketplace seller panel (same model)
 ```
@@ -38,7 +38,7 @@ Stack: Vite, React 19, TanStack Router (file-based) + TanStack Query v5, React H
 | `@spree/dashboard-core` | Framework: registries, `defineDashboardPlugin`, providers/hooks (`useAuth`, `usePermissions`, `useStore`), `adminClient`, `ResourceTable`, `PageHeader`, `Slot`. |
 | `@spree/dashboard` | The app shell (routes, resource pages, locales) **and** a facade re-exporting both packages above. |
 
-In the host app, always `import { … } from '@spree/dashboard'`. Only a distributed plugin imports `-core`/`-ui` directly. Full list: [references/public-api.md](references/public-api.md).
+In the host app, always `import { … } from '@spree/dashboard'`. Only a distributed plugin imports `-core`/`-ui` directly, and then only from their package entry points, never deep file paths. The packages ship source, and a deep import makes Vite leave a CommonJS dependency unconverted in an installed app, so the dashboard dies before rendering (1.0.0-beta.4's setup screen hit exactly this). Full list: [references/public-api.md](references/public-api.md).
 
 ### Where code goes (starter convention)
 
@@ -326,6 +326,7 @@ For the full 5.x → 6 migration, see `spree-upgrade-5-to-6`.
 - **Frozen labels:** `label: i18n.t(...)` doesn't follow language switches; use `labelKey`.
 - **Nested `<form>` inside a host-form slot** breaks the page's Save. Use `useHostForm()`.
 - **Never embed an SDK entity type in form-values types** — RHF walks nested keys and the TS compiler blows up; map to a flat values type.
+- **Don't loosen the dashboard's dependency pins.** `@spree/dashboard-ui` compiles into your app, so its dependencies are pinned exactly (`@base-ui/react` 1.8.0, `recharts` 3.10.1, …) to what Spree tested. A newer Base UI floating in (via an override, a caret range, or dashboard packages older than 1.0.0-beta.7) fails before the first render with a `SyntaxError` about `useSyncExternalStore`. Upgrade the `@spree/dashboard*` packages together rather than bumping Base UI yourself.
 - **Don't reach into Rails.** A missing endpoint is added to the Admin API first (`spree-resource`, `spree-api-v3`).
 
 ## Where to read further

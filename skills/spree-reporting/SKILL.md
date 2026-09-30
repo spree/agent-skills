@@ -106,6 +106,7 @@ Contract (same for Ruby, `POST /api/v3/admin/reporting/query`, and `adminClient.
 
 - At most two dimensions. Filters: `eq` / `in`, values are prefixed IDs for record dimensions.
 - `time_range`: presets (`today`, `yesterday`, `week_to_date`, `month_to_date`, `quarter_to_date`, `year_to_date`, `last_week`, `last_month`, `last_quarter`, any `last_<n>_<days|weeks|months>`) or `since`/`until` ISO 8601.
+- `compare`: `previous_period` shifts the range back by the same number of calendar days in the store zone, except a range of whole calendar months (`last_month`, `last_quarter`, a full quarter by `since`/`until`), which shifts by whole months, so July–September compares with April–June. `previous_year` shifts by a calendar year.
 - Unknown members raise `Spree::Reporting::UnknownMember`; malformed queries `Spree::Reporting::InvalidQuery` → 422. Nothing is silently dropped.
 
 ```ruby

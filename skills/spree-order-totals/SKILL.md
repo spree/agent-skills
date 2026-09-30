@@ -84,12 +84,15 @@ For a **placed** order (`completed?`) — or when called with `resum_only: true`
 |---|---|---|
 | Manual discount (flat/percent, one line or distributed) | `Spree::Orders::Discounts::Create/Update/Destroy` | `POST/PATCH/DELETE /api/v3/admin/orders/:id/discounts` |
 | Fee | `Spree::Orders::Fees::Create/Update/Destroy` | `/api/v3/admin/orders/:id/fees` |
+| Items / attributes | `Spree::Orders::Update` (`items: [...]`), `Orders::UpdateItem`, `Orders::AddItem` | `PATCH /api/v3/admin/orders/:id`, `/api/v3/admin/orders/:id/items` |
 | Tax lines | — (provider-written) | `GET /api/v3/admin/orders/:id/tax_lines` (read-only) |
 
 ```ruby
 Spree::Orders::Discounts::Create.call(order: order, label: 'Price match', value: '15', value_type: 'flat')
 Spree::Orders::Fees::Create.call(order: order, attributes: { label: 'Handling', kind: 'handling', amount: 2.5 })
 ```
+
+Each of these services re-sums and then calls `order.update_statuses!`, because no event announces a moved total. A paid order that gains a fee reads `partially_paid`, and one cut below what was paid reads `overcharged` (`amount_due` floors at zero, so only the status says a refund is owed). A custom service that edits a placed order's money must make the same call. `Orders::Update` is all-or-nothing: if any item change in the request is refused, no line, quantity or address change is saved.
 
 Only `manual` discounts are editable — touching a `promotion` row fails (`422` via the API). Because tax is not re-estimated on a placed order, a manual discount does **not** reduce already-charged tax; handle tax corrections through your tax provider / a return.
 
@@ -165,7 +168,7 @@ cart.display_amount_due      // after gift cards / store credit
 - **`discount_total` counts only `promotion` rows.** Manual discounts (and custom adjuster discounts) are in `adjustment_total` and `total` but not in `discount_total`. If your summary shows `discount_total` + `total`, a manual discount looks like a missing amount — show `item_total + delivery_total + fee_total + additional_tax_total − total` as "Discounts", or list `Spree::Discount` rows.
 - **Never write totals columns directly** (`update_column(:total, …)`) — the next recalculation overwrites them. Write rows, then call `recalculate_totals!` / the order services.
 - **Never create `TaxLine` rows by hand.** They're replace-all per item by the provider; yours vanish on the next estimate.
-- **Changing items unapplies gift cards and checkout store credit** (`Spree::Carts::Recalculate`) — re-apply after edits.
+- **Changing items unapplies gift cards and checkout store credit** (`Spree::Carts::Recalculate`) — re-apply after edits. A plain totals recalculation (delivery, discounts, tax moving) keeps the gift card and resizes its payment to the new total instead.
 - An adjuster that raises aborts the whole recalculation (and the customer's add-to-cart). Keep external calls out of adjusters or rescue inside.
 - Don't read `row.order` during checkout — use `row.owner`.
 
