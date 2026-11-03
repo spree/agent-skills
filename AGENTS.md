@@ -2,7 +2,7 @@
 
 This file follows the [agents.md](https://agents.md) cross-tool standard. It's a portable summary of how to be effective on a Spree Commerce codebase, written for any agentic CLI (Codex, Cursor, Copilot, Aider, Windsurf, Zed, Amp, etc.) that reads `AGENTS.md`.
 
-**Targets Spree 6.x (Rails 8.1).** For Spree 5.x projects, use the `v0.3.0` tag of this repository.
+**Targets Spree 6.x.** For Spree 5.x projects, use the `v0.3.0` tag of this repository.
 
 If you're running in **Claude Code**, install this package as a plugin and you'll get the 38 SKILL.md files under `skills/` as on-demand context, the `spree-expert` subagent, two slash commands, and two safety hooks. See [README.md](./README.md) for install instructions.
 
@@ -12,7 +12,7 @@ If you're running in **any other tool**: read this file, then dive into the rele
 
 ## What Spree is
 
-Spree Commerce is an open-source, self-hosted, API-first commerce platform built on Ruby on Rails. The thing people choose it for is the ability to customize and extend it without forking. Architecture:
+Spree Commerce is an open-source, self-hosted, API-first commerce platform. The thing people choose it for is the ability to customize and extend it without forking. Architecture:
 
 1. **Backend (Ruby gems)** — `spree_core` (models, services, workflows), `spree_api` (Store, Admin and Seller REST APIs under `/api/v3/`), `spree_dashboard` (serves the admin dashboard at `/dashboard`), `spree_emails` (transactional email), plus provider gems (`spree_stripe`, `spree_meilisearch`, `spree_easypost`, …).
 2. **TypeScript SDKs** — `@spree/sdk` (Store API), `@spree/admin-sdk` (Admin API), `@spree/seller-sdk` (Seller API).

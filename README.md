@@ -32,7 +32,7 @@ npx skills update
 
 ### 38 skills
 
-Targets **Spree 6.x** (Rails 8.1). Working on Spree 5.x? Install the [`v0.3.0`](https://github.com/spree/agent-skills/tree/v0.3.0) release instead.
+Targets **Spree 6.x**. Working on Spree 5.x? Install the [`v0.3.0`](https://github.com/spree/agent-skills/tree/v0.3.0) release instead.
 
 | Skill | When it activates |
 |---|---|
