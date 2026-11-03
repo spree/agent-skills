@@ -104,7 +104,9 @@ If you're on Claude Code and want the safety hooks too, install as a plugin **fr
 /plugin install spree@spree
 ```
 
-Plugin install gives you everything `npx skills add` does **plus** subagent and the two slash commands and the two safety hooks. Use one path or the other — don't double-install (skills will collide).
+Plugin install gives you everything `npx skills add` does **plus** subagent, the two slash commands, the two safety hooks and the [Spree documentation MCP server](https://spreecommerce.org/docs/developer/agentic/docs-mcp) (`spree-docs`), so the agent can search the current docs. Use one path or the other — don't double-install (skills will collide).
+
+To manage your store from Claude (orders, products, reports), connect your store's own [Admin MCP server](https://spreecommerce.org/docs/developer/mcp/quick-start) separately — its URL and sign-in are specific to your store, so the plugin can't ship it.
 
 ## Cross-tool compatibility
 
