@@ -4,7 +4,7 @@ This file follows the [agents.md](https://agents.md) cross-tool standard. It's a
 
 **Targets Spree 6.x.** For Spree 5.x projects, use the `v0.3.0` tag of this repository.
 
-If you're running in **Claude Code**, install this package as a plugin and you'll get the 38 SKILL.md files under `skills/` as on-demand context, the `spree-expert` subagent, two slash commands, and two safety hooks. See [README.md](./README.md) for install instructions.
+If you're running in **Claude Code**, install this package as a plugin and you'll get the 39 SKILL.md files under `skills/` as on-demand context, the `spree-expert` subagent, two slash commands, and two safety hooks. See [README.md](./README.md) for install instructions.
 
 If you're running in **any other tool**: read this file, then dive into the relevant `skills/<name>/SKILL.md` when the task matches its domain.
 
@@ -51,7 +51,13 @@ All share prefixed IDs (`prod_…`, `cart_…`, `or_…`, `variant_…`), `{ dat
 ### TypeScript
 
 - Use `@spree/sdk` / `@spree/admin-sdk` / `@spree/seller-sdk` to call the API from TypeScript.
-- For custom endpoints, use the SDK's `client.request<T>(method, path, options)` escape hatch or extend the client with a wrapped resource class — don't fork the SDK and don't bypass it with raw `fetch`.
+- For custom endpoints, use the SDK's `client.request<T>(method, path, options)` escape hatch, or add a typed namespace with `define{Store,Admin,Seller}Extension` + `client.extend()` (an extension gem generates one with `spree sdk generate`) — don't fork the SDK and don't bypass it with raw `fetch`.
+
+### OpenAPI and agent tools
+
+- Document custom Admin (and extension Store) endpoints with rswag specs (`admin_operation`, `request_body_for`, `filter_parameters_for`) and commit the generated documents: `openapi/admin.yaml`, plus `openapi/store.yaml` for an extension with Store endpoints (`spree task openapi:generate`; in a gem `bundle exec rake spree:openapi:generate`).
+- Every documented admin write action other than CRUD becomes an Admin MCP tool automatically — write summaries/descriptions for the model. Opt a write out with `agent_tool false, reason: '…'`; a custom read becomes a tool only with `agent_tool true`. Only non-endpoint capabilities need a hand-written `Spree::AgentTool` in `Spree.admin_agent_tools`.
+- The Admin MCP endpoint (`/api/v3/admin/mcp`) accepts per-person OAuth only — never an `sk_` key.
 
 ## Project layout and commands
 
@@ -70,7 +76,9 @@ spree rake <task> | task <name>   # `task` auto-prefixes `spree:`
 spree rails <args> | bundle <args> | exec <command>
 spree seed | sample-data | user create | api-key create|list|revoke
 spree encryption init [--print]   # add ACTIVE_RECORD_ENCRYPTION_* keys to .env (never overwrites)
-spree add dashboard         # add apps/dashboard (also: spree add seller-dashboard)
+spree add dashboard         # add apps/dashboard (also: spree add seller-dashboard | mcp | paypal)
+spree task openapi:generate # write server/openapi/admin.yaml from the rswag integration specs
+spree sdk generate          # in an extension's npm package: typed client from its OpenAPI
 spree plugin new <name>     # scaffold a dashboard plugin (the gem half is a spree_extension >= 2.0 gem)
 spree eject | build [--production] | update
 spree upgrade [--plan]      # bundle update + migrate + spree:upgrade data steps
@@ -115,13 +123,14 @@ When the task domain matches one of these, read the corresponding `skills/<name>
 | Project layout, conventions, CLI vs classic flavor | `spree-project` |
 | "Where does my customization belong?" — hook vs subscriber vs provider vs decorator | `spree-customization` |
 | Workflows and `Spree.hooks` — validate/lifecycle/context hooks, `has_status` | `spree-workflows` |
-| New model + API endpoint (`spree:api_resource` generator) | `spree-resource` |
+| New model + API endpoint (`spree:api_resource` generator); OpenAPI for custom endpoints (rswag, `spree task openapi:generate`) | `spree-resource` |
 | Extending existing classes via decorators (`prepend`) — last resort | `spree-decorators` |
 | Swapping core workflows/services/serializers via `Spree.dependencies` | `spree-dependencies` |
 | Installing extensions or writing your own gem | `spree-extensions` |
 | Plugging in tax, delivery rate, payment, search, payout, auth providers | `spree-providers` |
 | REST API v3 — surfaces, auth, envelopes, prefixed IDs, scopes | `spree-api-v3` |
-| `@spree/sdk`, `@spree/admin-sdk`, `@spree/seller-sdk` | `spree-typescript-sdk` |
+| `@spree/sdk`, `@spree/admin-sdk`, `@spree/seller-sdk`; SDK extensions (`client.extend`, `spree sdk generate`) | `spree-typescript-sdk` |
+| Admin MCP server — connecting AI clients, using its tools, adding custom agent tools | `spree-mcp` |
 | Calling/debugging the Admin API from the terminal (`spree api`) | `spree-cli` |
 | Staff roles, permission keys, API scopes, SSO/custom authentication | `spree-auth-permissions` |
 | Domain model — stores, markets, carts, orders, customers, prefixed IDs | `spree-data-model` |
@@ -161,7 +170,7 @@ When the task domain matches one of these, read the corresponding `skills/<name>
 - Don't drop or truncate `spree_*` tables without a backup. The plugin's safety hook blocks the most dangerous cases (DROP TABLE on any `spree_*` table, `db:drop`/`db:reset`, TRUNCATE or mass deletes of orders, carts, payments, refunds, fulfillments, customers, staff, gift cards, store credits and API keys) when installed via `/plugin install spree@spree` in Claude Code; other tools aren't covered.
 - Don't bypass store scoping in custom controllers.
 - Don't expose raw integer IDs in API responses — always prefixed IDs.
-- Don't fork `@spree/sdk` to add custom endpoints — extend it via `client.request` or a wrapped resource class.
+- Don't fork `@spree/sdk` to add custom endpoints — extend it via `client.request` or `client.extend()`.
 
 ## Where to read further
 

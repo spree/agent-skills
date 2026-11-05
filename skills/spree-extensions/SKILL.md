@@ -1,6 +1,6 @@
 ---
 name: spree-extensions
-description: Use when installing a Spree gem (spree_stripe, spree_easypost, spree_meilisearch, spree_opentelemetry, spree_i18n, spree_adyen, spree_multi_store…) or building your own reusable Spree 6 extension — a gem (Rails engine) for models, API endpoints, permissions, hooks and providers, paired with a dashboard plugin (npm package) for admin screens. Common phrasings - "add Stripe", "install spree_X", "create a Spree extension", "build a gem for Spree", "spree-extension create", "share this across apps", "register a provider from my gem", "engine initializer", "after_initialize vs to_prepare", "extension migrations". For single-app customization start with spree-customization — most work doesn't need a gem.
+description: Use when installing a Spree gem (spree_stripe, spree_easypost, spree_meilisearch, spree_opentelemetry, spree_i18n, spree_adyen, spree_multi_store…) or building your own reusable Spree 6 extension — a gem (Rails engine) for models, API endpoints, permissions, hooks and providers, paired with a dashboard plugin (npm package) for admin screens. Common phrasings - "add Stripe", "install spree_X", "create a Spree extension", "build a gem for Spree", "spree-extension create", "share this across apps", "register a provider from my gem", "engine initializer", "after_initialize vs to_prepare", "extension migrations", "ship openapi.yaml in my gem", "agent tools from my extension", "npm client for my extension". For single-app customization start with spree-customization — most work doesn't need a gem.
 ---
 
 # Spree Extensions
@@ -44,9 +44,10 @@ The `spree-starter` server Gemfile (what `create-spree-app` clones into `server/
 | `spree_easypost` | EasyPost carrier rates, labels, tracking (delivery rate + fulfillment provider) |
 | `spree_meilisearch` | Meilisearch search provider (`SpreeMeilisearch::SearchProvider`) |
 | `spree_opentelemetry` | OpenTelemetry tracing (dormant until `OTEL_*` env is set) |
+| `spree_mcp` | The Admin MCP server at `/api/v3/admin/mcp` (`spree add mcp` on older projects). See `spree-mcp` |
 | `spree_i18n` | UI translations |
 
-`spree_adyen` and `spree_paypal_checkout` are present but commented out — check each gem's gemspec/CHANGELOG for a Spree 6 compatible release before enabling. The same goes for any community gem from the Spree 4/5 era (`spree_reviews`, `spree_avatax_official`, …): check the `spree_core` constraint first; most need porting (no `spree_admin`, no `Spree::Adjustment`, no state machines). Integrations catalog: `https://spreecommerce.org/docs/integrations`.
+`spree_adyen` and `spree_paypal_checkout` are present but commented out. `spree_paypal_checkout` ships with Spree at the same version from 6.0.3: `spree add paypal` installs it, and a project on 6.0.0–6.0.2 upgrades to 6.0.3 first. For `spree_adyen`, check its gemspec/CHANGELOG for a Spree 6 compatible release before enabling. The same goes for any community gem from the Spree 4/5 era (`spree_reviews`, `spree_avatax_official`, …): check the `spree_core` constraint first; most need porting (no `spree_admin`, no `Spree::Adjustment`, no state machines). Integrations catalog: `https://spreecommerce.org/docs/integrations`.
 
 Multi-store *sharing* (one product/promotion/payment method across several stores) is not core — core records belong to one store. Use the `spree_multi_store` extension for that.
 
@@ -116,6 +117,31 @@ end
 
 Full controller/serializer templates: `spree-resource` (the `spree:api_resource` generator emits them) and `spree-api-v3`. Namespace paths of plugin-owned resources to avoid collisions with future core resources.
 
+### Documenting the API: agent tools and an SDK client
+
+A gem documents its endpoints in its own `openapi/admin.yaml` (and `openapi/store.yaml` for Store endpoints). Spree merges every installed gem's admin document into core's at runtime, so each documented admin action becomes an Admin MCP / dashboard-assistant tool with no registration.
+
+```bash
+bundle exec rails g spree_dev_tools:openapi   # swagger helper, contract spec, skipped skeleton specs (spree_dev_tools >= 1.0.1)
+bundle exec rake spree:openapi:generate       # writes openapi/*.yaml from spec/integration/**/*_spec.rb (task from extension_rake)
+```
+
+- Write the specs with `admin_operation`, `request_body_for` and `filter_parameters_for`, then commit the YAML. See `spree-resource` § Documenting endpoints.
+- Keep `spec/agent_tools_spec.rb` (`it_behaves_like 'an engine whose admin writes are agent tools', MyExtension::Engine`). It fails on:
+  - undocumented admin actions,
+  - opt-outs without a reason,
+  - tool-name clashes with core or other gems,
+  - conflicts with core's document.
+- **Ship the YAML in the gem.** A `git ls-files` gemspec already does. A hand-listed one needs `s.files = Dir['{app,config,db,lib}/**/*', 'openapi/*.yaml', 'LICENSE', 'README.md']`. Without it the tools vanish once the gem is installed.
+- **Typed client.** An npm package next to the gem sets `"spree": { "extension": "../my_extension" }` in its `package.json` and runs `spree sdk generate`. Apps then use `extendAdminClient(createAdminClient(…))`. See `spree-typescript-sdk`.
+- Give the gem's serializers names the SDK doesn't use (not `OrderSerializer`), or generated types clash.
+
+### Extension hooks (6.0.3+)
+
+- `Spree::Dependencies.register` puts the extension's own workflows behind a key that a store can swap, the same way core's `*_workflow` keys work (see `spree-dependencies` for swapping).
+- `Spree.cart_copiers` copies an extension's cart-owned records onto the order the cart becomes.
+- The `orders.complete.validate` hook can refuse an order's placement while holding its row lock.
+
 ### Registrations — where and when
 
 Registrations go in the extension's `config/initializers/spree.rb`; model-touching code goes in the engine's `config.to_prepare`. **Timing matters**, because core assigns some registries with `=` inside its own `config.after_initialize`, wiping anything appended earlier:
@@ -180,6 +206,7 @@ The plugin calls `defineDashboardPlugin(...)` to add nav entries, routes and slo
 ```bash
 bundle exec rake test_app     # generate spec/dummy (re-run after adding migrations)
 bundle exec rspec
+bundle exec rake spree:openapi:generate   # after API changes; commit openapi/*.yaml
 ```
 
 Uses RSpec + Factory Bot via `spree_dev_tools`. Put your factories in `lib/spree_reviews/factories.rb`. API specs use shared contexts from `spree/api/testing_support/v3/base` — `'API v3 Store'`, `'API v3 Admin authenticated'`, `'API v3 Admin with custom permissions'`, `'API v3 Seller authenticated'`. See `spree-testing`.
@@ -201,4 +228,4 @@ Uses RSpec + Factory Bot via `spree_dev_tools`. Put your factories in `lib/spree
 - Providers & integrations: `node_modules/@spree/docs/dist/developer/providers/overview.md`
 - Dashboard plugins: `node_modules/@spree/docs/dist/developer/dashboard/plugins/{overview,scaffolding,distributing}.md`
 - Customization quickstart: https://spreecommerce.org/docs/developer/customization/quickstart
-- Related skills: `spree-customization`, `spree-providers`, `spree-workflows`, `spree-resource`, `spree-auth-permissions`, `spree-dashboard-plugins`, `spree-testing`
+- Related skills: `spree-customization`, `spree-providers`, `spree-workflows`, `spree-resource`, `spree-mcp`, `spree-typescript-sdk`, `spree-auth-permissions`, `spree-dashboard-plugins`, `spree-testing`

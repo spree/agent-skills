@@ -1,20 +1,20 @@
 ---
 name: spree-typescript-sdk
-description: Use when the user is building a TypeScript or JavaScript client against Spree 6 — a Next.js storefront, a mobile/web app, an integration or back-office tool, a webhook receiver. Covers @spree/sdk (Store API), @spree/admin-sdk (Admin API) and points to @spree/seller-sdk (marketplace). Common phrasings include "Spree SDK", "createClient", "createAdminClient", "store client", "admin client", "cart token / spreeToken", "carts.complete", "orders.get after checkout", "TypeScript types from Spree", "Zod schemas", "verifyWebhookSignature", "retry config", "client.request custom endpoint", "MSW Spree", "@spree/sdk", "@spree/admin-sdk". For curl/raw HTTP and protocol details, see spree-api-v3.
+description: Use when the user is building a TypeScript or JavaScript client against Spree 6 — a Next.js storefront, a mobile/web app, an integration or back-office tool, a webhook receiver — or shipping a typed client for an extension's endpoints. Covers @spree/sdk (Store API), @spree/admin-sdk (Admin API) and points to @spree/seller-sdk (marketplace); custom endpoints via `client.request`, SDK extensions (`define{Store,Admin,Seller}Extension` + `client.extend()`), and `spree sdk generate`. Common phrasings include "Spree SDK", "createClient", "createAdminClient", "cart token / spreeToken", "carts.complete", "orders.get after checkout", "TypeScript types from Spree", "Zod schemas", "verifyWebhookSignature", "retry config", "client.request custom endpoint", "client.extend", "typed client for my extension", "spree sdk generate", "MSW Spree". For curl/raw HTTP and protocol details, see spree-api-v3.
 ---
 
 # Spree TypeScript SDKs
 
-| Package | Surface | Auth | Version |
-|---|---|---|---|
-| `@spree/sdk` | Store API (`/api/v3/store`) | Publishable key + optional customer JWT / guest token | 2.x (currently 2.0 beta) |
-| `@spree/admin-sdk` | Admin API (`/api/v3/admin`) | Secret key **or** staff JWT | 1.x beta |
-| `@spree/seller-sdk` | Seller API (`/api/v3/seller`) | Seller JWT + seller ID (`createSellerClient`, `setSeller`) | 1.x beta. Singletons use `get`/`update` like the admin SDK (`seller.me.get()`, `seller.me.update({ selected_locale })`, `seller.profile.update(…)`). See `spree-marketplace` |
-| `@spree/sdk-core` | Shared HTTP, retry, errors | — | Internal, never published. Don't import it |
+| Package | Surface | Auth |
+|---|---|---|
+| `@spree/sdk` | Store API (`/api/v3/store`) | Publishable key + optional customer JWT / guest token |
+| `@spree/admin-sdk` | Admin API (`/api/v3/admin`) | Secret key **or** staff JWT |
+| `@spree/seller-sdk` | Seller API (`/api/v3/seller`) | Seller JWT + seller ID (`createSellerClient`, `setSeller`). Singletons use `get`/`update` like the admin SDK (`seller.me.get()`, `seller.me.update({ selected_locale })`, `seller.profile.update(…)`). See `spree-marketplace` |
+| `@spree/sdk-core` | Shared HTTP, retry, errors, extensions | Internal, never published. Don't import it |
 
-All three expose the same shape and share `SpreeError`, retry, idempotency and a `request` escape hatch. They target Spree 6. Spree 6 storefronts need `@spree/sdk` 2.x. Until 6.0 is final the SDKs and dashboard packages are published as prereleases on npm's `beta` dist-tag (`pnpm add @spree/sdk@beta`), while `@spree/cli` and `create-spree-app` are stable (3.1.0 / 2.1.0 alongside gems 6.0.0.beta4).
+The three SDKs version in lockstep with the Spree gems (6.0.3 alongside gems 6.0.3), so pin the SDK to your server's minor. `@spree/cli` versions on its own track (3.6.x for 6.0.3). All three expose the same shape and share `SpreeError`, retry, idempotency, a `request` escape hatch and `extend()`.
 
-`@spree/sdk` also ships `@spree/sdk/types` (generated types), `@spree/sdk/zod` (Zod schemas) and `@spree/sdk/webhooks` (signature verification, Node only). The Admin and Seller SDKs have matching `/types` and, from the release after `1.0.0-beta.3`, `/zod` subpaths (`@spree/admin-sdk/zod`, `@spree/seller-sdk/zod`). If the subpath doesn't resolve, the installed version predates it. Schemas are named `<Type>Schema` and generated from the API serializers. `zod` (>= 3) is an optional peer dependency, so install it yourself to validate responses at runtime:
+`@spree/sdk` also ships three subpaths: `@spree/sdk/types` (generated types), `@spree/sdk/zod` (Zod schemas) and `@spree/sdk/webhooks` (signature verification, Node only). The Admin and Seller SDKs have matching `/types` and `/zod` subpaths. Schemas are named `<Type>Schema` and generated from the API serializers. `zod` (>= 3) is an optional peer dependency, so install it yourself to validate responses at runtime:
 
 ```typescript
 import { OrderSchema } from '@spree/admin-sdk/zod'
@@ -102,7 +102,11 @@ Amounts are decimal strings (`"29.99"`) with `display_*` companions. On channels
 await client.products.list({ page: 2, limit: 50, name_cont: 'shirt', sort: '-created_at', expand: ['media'], fields: ['name', 'slug'] })
 ```
 
-Keys other than `page`/`limit`/`sort`/`expand`/`fields` become `q[...]` predicates (`name_cont` → `q[name_cont]`; arrays get `[]`). Don't nest predicates under a `filter` key.
+Keys other than `page`, `limit`, `sort`, `expand` and `fields` become `q[...]` predicates (`name_cont` → `q[name_cont]`; arrays get `[]`, nested objects use brackets).
+
+- A filter that isn't in the typed params, or one named like a passthrough key, goes under `q: { … }`. Entries in `q` are always sent as filters, and a top-level key overrides the same key in `q`.
+- Don't nest predicates under a `filter` key. It's sent as `q[filter][…]` and Ransack ignores it.
+- `spree filters types` generates typings for the filters your app adds (see `spree-cli`).
 
 ### Errors
 
@@ -141,7 +145,7 @@ await admin.orders.refunds.create('or_xxx', { payment_id: 'py_xxx', amount: '25.
 - **Secret key**: scope-limited. A missing scope throws 403 with `details.required_scope`. Mint the narrowest key you can (see `spree-api-v3/references/scopes.md`).
 - **Staff JWT** (custom back-office UIs): `admin.auth.login({ email, password })` (or `{ provider, ... }`) returns `{ token, user }`, and the refresh token is set as an HttpOnly cookie. Then call `admin.setToken(token)`. `admin.auth.refresh()` takes **no token argument** (the cookie drives it). Admin JWTs expire after 5 minutes, so wire up `admin.onUnauthorized(async () => { const { token } = await admin.auth.refresh(); admin.setToken(token); return true })`. The client defaults to `credentials: 'include'`. Staff are gated by their **roles' permission keys** (403 `details.required_permission`); see `spree-auth-permissions`.
 - `admin.setStore(storeId)` sends `X-Spree-Store-Id` on multi-store hosts.
-- Full CRUD plus domain actions: `orders.complete/cancel/approve`, `products.clone/bulkStatusUpdate/bulkAddToCategories/...`, `prices.bulkUpsert`, `stockLevels.bulkUpsert`, `roles`, `permissions.list()`, `exports`, `imports`, `webhookEndpoints`, `apiKeys`, and more (see `packages/admin-sdk/src/admin-client.ts`).
+- Full CRUD plus domain actions: `orders.complete/cancel/approve`, `products.activate/archive/draft` (one product, emits the product event), `products.clone/bulkStatusUpdate/bulkAddToCategories/...`, `prices.bulkUpsert`, `stockLevels.bulkUpsert`, `roles`, `permissions.list()`, `exports`, `imports`, `webhookEndpoints`, `apiKeys`, and more (see `packages/admin-sdk/src/admin-client.ts`).
 - Invitation listings carry no `acceptance_url`; fetch the link on demand with `admin.invitations.acceptanceLink(id)` (or `admin.sellers.invitations.acceptanceLink(sellerId, id)`) — write-gated. `admin.invitations.create` requires `role_id`.
 - `?expand=` of orders/payments/customers/gift cards/store credits is silently dropped when the key/staff member lacks that read permission — check scopes before assuming the API omitted data.
 - Stock is `admin.stockLevels` (`sl_…`), not `stockItems`. Addresses use `country_code` / `state_code`, not `country_iso`.
@@ -177,11 +181,17 @@ Subscribe to `order.placed`. `order.completed` is still sent through 6.0 as a de
 
 ## Extending the SDK for custom endpoints
 
-Don't fork the SDK, and don't bypass it with raw `fetch`: you'd lose auth headers, locale/currency/channel defaults, retry, idempotency and error normalization.
+Don't fork the SDK, and don't bypass it with raw `fetch`. You'd lose the auth headers, locale/currency/channel defaults, retry, idempotency and error normalization.
+
+| Situation | Use |
+|---|---|
+| An app calling one or two of its own endpoints | `client.request` |
+| A reusable typed namespace on the client (`client.brands.list()`) | `define…Extension` + `client.extend()` |
+| An extension (gem) shipping an npm client for its endpoints | `spree sdk generate` writes the extensions from the extension's OpenAPI |
 
 ### 1. One-off calls: `client.request`
 
-Paths are relative to the surface root (`/api/v3/store` or `/api/v3/admin`). `request` does **not** apply `transformListParams`, so wrap Ransack predicates yourself.
+Paths are relative to the surface root (`/api/v3/store`, `/api/v3/admin` or `/api/v3/seller`). `request` does **not** transform list params, so wrap Ransack predicates yourself:
 
 ```ts
 import type { PaginatedResponse } from '@spree/sdk'
@@ -194,43 +204,101 @@ const { data } = await client.request<PaginatedResponse<Brand>>('GET', '/brands'
 const created = await admin.request<Brand>('POST', '/brands', { body: { name: 'Acme' } })
 ```
 
-### 2. A wrapped resource class
+### 2. SDK extensions: `define…Extension` + `client.extend()` (6.0.3+)
+
+An extension adds one typed namespace to a client. It uses the client's own request function, so auth, store/seller headers, locale defaults and retries all apply.
 
 ```ts
-import type { RequestFn, PaginatedResponse } from '@spree/sdk'
+import { createClient, defineStoreExtension, type PaginatedResponse } from '@spree/sdk'
 
-export class BrandsClient {
-  constructor(private readonly request: RequestFn) {}
-  list(params: { page?: number; limit?: number; name_cont?: string } = {}) {
-    const { page, limit, ...predicates } = params
-    const q = Object.fromEntries(Object.entries(predicates).map(([k, v]) => [`q[${k}]`, v]))
-    return this.request<PaginatedResponse<Brand>>('GET', '/brands', { params: { page, limit, ...q } })
-  }
-  get(id: string) { return this.request<Brand>('GET', `/brands/${id}`) }
-}
+export const brands = defineStoreExtension('brands', ({ request, listParams, readParams }) => ({
+  list: (params: { page?: number; limit?: number; name_cont?: string } = {}) =>
+    request<PaginatedResponse<Brand>>('GET', '/brands', { params: listParams(params) }),
+  get: (id: string, params: { expand?: string[] } = {}) =>
+    request<Brand>('GET', `/brands/${id}`, { params: readParams(params) }),
+}))
+
+const client = createClient({ baseUrl, publishableKey }).extend(brands)
+await client.brands.list({ name_cont: 'acme' })   // typed; built-ins unchanged
 ```
 
-`@spree/admin-sdk` doesn't export `RequestFn`, so type admin wrappers with `AdminClient['request']`.
+- `defineAdminExtension` comes from `@spree/admin-sdk` and `defineSellerExtension` from `@spree/seller-sdk`. Each export also has its `ExtensionContext` type.
+- `build` receives three things:
+  - `request` — the client's request function.
+  - `listParams` — the same transform the built-in `list` methods use: filters to `q[…]`, plus `sort`, `page` and `expand`.
+  - `readParams` — builds `{ expand, fields }`.
+- `extend` returns a **new** client and leaves the original untouched. The two share settings, so a token or locale set on either applies to both. Chain `.extend(a).extend(b)` for more namespaces.
+- `extend` throws a `TypeError` when:
+  - the name already exists on the client (`products`, or the same extension added twice),
+  - the extension was defined for another API (a store extension on an admin client),
+  - the name is `then`.
 
-### 3. Attaching it to the client
+  Extensions only add namespaces. To change a built-in method, wrap it in your own namespace.
+- A package that ships an extension lists the SDK as a **peer dependency**, so the app's own client instance is the one extended.
+
+This replaces the old patterns of `new BrandsClient(client.request)` assigned onto the client, and `Object.assign` over a resource. Those still run, but `extend` is typed and doesn't drop the prototype-held resources.
+
+### 3. Generating an extension's client: `spree sdk generate`
+
+For a Spree extension (gem) with its own Store/Admin/Seller endpoints, ship an npm package whose client is generated from the gem.
+
+1. Document the gem's endpoints with rswag so it produces `openapi/admin.yaml` / `openapi/store.yaml` (see `spree-resource` § Documenting endpoints). Its serializers describe the responses.
+2. In the package's `package.json`, point at the gem:
+
+   ```json
+   {
+     "name": "my-quotes-extension",
+     "peerDependencies": { "@spree/admin-sdk": "^6.0.3" },
+     "spree": { "extension": "../my_extension" }
+   }
+   ```
+
+3. Generate from the package directory. Build the gem's dummy app once first (`bundle exec rake test_app`).
+
+   ```bash
+   spree sdk generate               # runs the gem's rake spree:openapi:generate + spree:sdk:serializer_types, then writes
+   spree sdk generate --no-backend  # from the committed openapi/*.yaml and types only
+   spree sdk generate --check       # CI: fail if generated files are stale
+   ```
+
+It writes the following under `src/generated/<api>/`:
+
+| File | Contents |
+|---|---|
+| `client.ts` | One extension per resource: `list`, `get`, `create`, `update`, `delete` and each action, camel-cased (`PATCH /quotes/{id}/send` → `quotes.send()`). Each method carries the operation's summary as JSDoc. Also exports `extendAdminClient` / `extendStoreClient`, which add every namespace. |
+| `params/` | Request bodies (from `request_body_for`) |
+| `filters.ts` | List filters (from `filter_parameters_for`) |
+| `types/`, `spree.ts` | Response types from the serializers. `spree.ts` re-exports the SDK's types, so a `Quote` that nests an order uses the SDK's `Order`. |
+
+Re-export the generated files from the package entry point, wrapping or renaming methods there if you want:
 
 ```ts
-import { createClient, type Client, type ClientConfig } from '@spree/sdk'
-
-export interface ExtendedClient extends Client { brands: BrandsClient }
-
-export function createExtendedClient(config: ClientConfig): ExtendedClient {
-  const client = createClient(config) as ExtendedClient
-  client.brands = new BrandsClient(client.request)
-  return client
-}
+// src/index.ts
+export * from './generated/admin/client'
+export type * from './generated/admin/spree'
 ```
 
-To add a method to a built-in resource, use `Object.assign(base, { products: { ...base.products, republish(id: string) { ... } } })`. **Don't spread the client itself** (`{ ...base }`), because resources live on the prototype and would be dropped.
+The consuming app:
+
+```ts
+import { createAdminClient } from '@spree/admin-sdk'
+import { extendAdminClient } from 'my-quotes-extension'
+
+const admin = extendAdminClient(createAdminClient({ baseUrl, secretKey }))
+await admin.quotes.send('quote_1', { valid_until: '2026-12-01' })   // typed as Quote
+```
+
+Generation refuses some inputs:
+
+- **Serializer names that clash with SDK types.** A serializer called `OrderSerializer` would collide with the SDK's `Order`, and two serializers in one API ending in the same name are refused. Rename the serializer.
+- **Two operations that map to one method.** Give one an `operationId`.
+- **Responses with no schema.** These aren't refused: they're typed by the resource name (`quotes` → `Quote`).
 
 ### Types for custom resources
 
-Serializers generated by `spree:api_resource` are typed through Typelizer (`bundle exec rake typelizer:generate` in the API engine). In a standalone app, point Typelizer's output at your own folder or hand-write the interfaces to match the serializer. The serializer is the source of truth.
+- **Ad-hoc types.** Serializers are the source of truth. For `client.request`, hand-write the interface to match the serializer's `typelize` declarations (money is `string`).
+- **Generated types.** `spree sdk generate` uses `rake spree:sdk:serializer_types`.
+- **Typelizer 0.14.** `spree_api` 6.0.3 requires Typelizer `~> 0.14.0`. Update it together with Spree (`bundle update spree typelizer`). The old `DISABLE_TYPELIZER` / `ENABLE_TYPELIZER` env vars no longer do anything; Spree sets the new `TYPELIZER` switch itself, so delete them from `.env` files and CI.
 
 ## Testing with MSW
 
@@ -256,6 +324,7 @@ const client = createClient({ baseUrl: 'https://test.spree.local', publishableKe
 ## Where to read further
 
 - Store SDK source: `packages/sdk/src/store-client.ts`. Admin SDK: `packages/admin-sdk/src/admin-client.ts`. Seller SDK: `packages/seller-sdk/src/seller-client.ts`
-- Docs: `node_modules/@spree/docs/dist/developer/sdk/` (Store quickstart, `admin/quickstart.md`, `admin/authentication.md`)
-- OpenAPI: `node_modules/@spree/docs/dist/api-reference/store.yaml`, `admin.yaml`, `seller.yaml`
-- Related skills: `spree-api-v3`, `spree-storefront`, `spree-checkout`, `spree-events-webhooks`, `spree-auth-permissions`, `spree-marketplace`.
+- Docs: `node_modules/@spree/docs/dist/developer/sdk/` (Store quickstart, `extending.md`, `admin/quickstart.md`, `admin/authentication.md`, `admin/extending.md`)
+- Extension source: `packages/sdk-core/src/extensions.ts`; generator: `packages/cli/src/commands/sdk.ts` + `packages/sdk-core/src/extension-source.ts`
+- OpenAPI: `node_modules/@spree/docs/dist/api-reference/store.yaml`. Admin and Seller specs are at `/openapi/api-reference/{admin,seller}.yaml` on the `spree-docs` MCP server, or `docs/api-reference/` in the spree/spree repo.
+- Related skills: `spree-api-v3`, `spree-resource` (OpenAPI for custom endpoints), `spree-mcp`, `spree-storefront`, `spree-checkout`, `spree-events-webhooks`, `spree-auth-permissions`, `spree-marketplace`.

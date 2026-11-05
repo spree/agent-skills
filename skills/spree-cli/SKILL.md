@@ -148,7 +148,23 @@ spree db:console                        # psql against the dev database
 spree add dashboard                     # scaffold apps/dashboard (or: spree add seller-dashboard)
 spree plugin new brands                 # scaffold a dashboard plugin repo (the Rails engine half is a separate spree_extension gem)
 spree encryption init [--print]         # add Active Record encryption keys to .env (never overwrites; --print only prints a set)
+spree add mcp                           # add the Admin MCP server gem (spree_mcp) — see spree-mcp
+spree add paypal                        # add spree_paypal_checkout at the project's Spree version (6.0.3+)
+spree task openapi:generate             # write server/openapi/admin.yaml from the app's rswag specs — see spree-resource
+spree filters types                     # TypeScript typings for your app's custom list filters, into each app under apps/
 ```
+
+### `spree sdk generate` (extension packages)
+
+Run it in an npm package that ships a typed client for an extension's endpoints, with `"spree": { "extension": "../my_extension" }` in its `package.json`. It doesn't need the dev stack; it runs the gem's own `rake spree:openapi:generate spree:sdk:serializer_types`, then writes `src/generated/<api>/` (`client.ts`, `params/`, `filters.ts`, `types/`, `spree.ts`).
+
+```bash
+spree sdk generate               # regenerate after an endpoint or serializer change
+spree sdk generate --no-backend  # from the committed openapi/*.yaml only
+spree sdk generate --check       # CI: fail when generated files are stale
+```
+
+See `spree-typescript-sdk` § Generating an extension's client.
 
 `spree shell` and `spree rspec` still work when the web container is crash-looping: they fall back to a one-off `compose run`.
 
@@ -156,6 +172,10 @@ spree encryption init [--print]         # add Active Record encryption keys to .
 
 - **Shopper carts.** The Admin API exposes orders (`/orders`, `/order_groups`) but not in-progress carts. Inspect those in `spree console` or through the Store API with the cart token.
 - **Store/Seller API responses.** Use `curl` with a `pk_` key (Store) or the seller SDK.
+
+### `spree api` vs the Admin MCP server
+
+`spree api` uses a secret key and suits scripts and debugging. The Admin MCP server (`/api/v3/admin/mcp`) is for an AI client acting for a signed-in person through OAuth, and it refuses `sk_` keys. See `spree-mcp`.
 
 ## Gotchas
 

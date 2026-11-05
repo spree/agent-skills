@@ -30,7 +30,7 @@ npx skills update
 
 ## What ships
 
-### 38 skills
+### 39 skills
 
 Targets **Spree 6.x**. Working on Spree 5.x? Install the [`v0.3.0`](https://github.com/spree/agent-skills/tree/v0.3.0) release instead.
 
@@ -39,13 +39,14 @@ Targets **Spree 6.x**. Working on Spree 5.x? Install the [`v0.3.0`](https://gith
 | `spree-project` | General Spree project context — layout (`server/`, `apps/dashboard`), conventions, CLI vs classic Rails flavor. |
 | `spree-customization` | Decision tree for "where does my customization belong" — hook vs subscriber vs provider vs decorator. Use FIRST when the pattern isn't obvious. |
 | `spree-workflows` | `Spree::Workflow` and `Spree.hooks` — validate, lifecycle and context hooks; `has_status`. |
-| `spree-resource` | Adding a new model + API endpoint via the `spree:api_resource` generator, or a model-only resource via `spree:model`. |
+| `spree-resource` | Adding a new model + API endpoint via the `spree:api_resource` generator, or a model-only resource via `spree:model`; documenting custom endpoints in OpenAPI (rswag, `spree task openapi:generate`). |
 | `spree-decorators` | Extending existing Spree classes via decorators (`Module#prepend`) — the last resort. |
 | `spree-dependencies` | Swapping core workflows, services and serializers via `Spree.dependencies`. |
 | `spree-extensions` | Installing official gems or building your own extension (engine + dashboard plugin). |
 | `spree-providers` | Plugging in tax, delivery rate, fulfillment, payment, search, payout, digital asset and auth providers. |
 | `spree-api-v3` | REST API v3 — Store, Admin and Seller surfaces, auth, scopes, prefixed IDs, envelopes, errors. |
-| `spree-typescript-sdk` | `@spree/sdk`, `@spree/admin-sdk`, `@spree/seller-sdk` — auth, types, webhooks, extension patterns. |
+| `spree-typescript-sdk` | `@spree/sdk`, `@spree/admin-sdk`, `@spree/seller-sdk` — auth, types, webhooks, `client.extend()` SDK extensions, `spree sdk generate`. |
+| `spree-mcp` | The store's Admin MCP server — connecting AI clients (OAuth), using its tools, and adding custom agent tools (documented endpoints or `Spree::AgentTool`). |
 | `spree-cli` | `spree api` — call/inspect the Admin API from the terminal. Especially for debugging. |
 | `spree-auth-permissions` | Staff roles as data, permission keys, API key scopes, SSO and custom authentication. |
 | `spree-data-model` | Domain model — stores, channels, markets, carts vs orders, customers, companies, prefixed IDs. |
