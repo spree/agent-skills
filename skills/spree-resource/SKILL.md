@@ -1,6 +1,6 @@
 ---
 name: spree-resource
-description: Use when the user wants to add a new model, database table, or REST API endpoint to a Spree 6 project. Covers `spree:api_resource` (model + migration + Store/Admin API controllers + serializers + factory + controller specs + routes + permission scope) and `spree:model` (model + migration only). Common phrasings include "add a Brand model", "create a new resource", "expose X as an API endpoint", "add an Admin API for Y", "scaffold a Spree resource", "create a Spree model without an API", "internal model", "make my model store-scoped".
+description: Use when the user wants to add a new model, database table, or REST API endpoint to a Spree 6 project, or document custom endpoints in OpenAPI. Covers `spree:api_resource` (model + migration + Store/Admin controllers + serializers + factory + specs + rswag integration spec + routes + permission scope), `spree:model` (model + migration only), and generating `openapi/admin.yaml` / `store.yaml` with rswag (`admin_operation`, `request_body_for`, `filter_parameters_for`, `spree_dev_tools:openapi`, `spree task openapi:generate`) — the document behind MCP agent tools and `spree sdk generate`. Common phrasings include "add a Brand model", "create a new resource", "expose X as an API endpoint", "add an Admin API for Y", "scaffold a Spree resource", "model without an API", "make my model store-scoped", "OpenAPI for my endpoint", "swagger docs for custom API", "rswag", "openapi:generate".
 ---
 
 # Adding a Spree Resource
@@ -12,6 +12,7 @@ To add a model exposed through the v3 API, use the `spree:api_resource` generato
 - The model (`server/app/models/spree/<name>.rb`) and its migration
 - Store + Admin API controllers and serializers
 - A FactoryBot factory and controller specs for both APIs
+- An rswag integration spec documenting the Admin endpoints (`spec/integration/admin/<plural>_spec.rb`), which generates `openapi/admin.yaml` (see [Documenting endpoints](#documenting-endpoints-openapi))
 - Route lines inside the `Spree::Core::Engine.add_routes` block of your app's `config/routes.rb`
 - The `read_<plural>` / `write_<plural>` permission scope (`Spree.permissions.register_scope` appended to `config/initializers/spree.rb`) and its role-editor label (`config/locales/spree_<plural>.en.yml`) — Admin surface only
 
@@ -76,6 +77,7 @@ server/app/serializers/spree/api/v3/brand_serializer.rb             (managed)
 server/app/serializers/spree/api/v3/admin/brand_serializer.rb       (managed)
 server/spec/factories/spree/brand_factory.rb                        (managed)
 server/spec/controllers/spree/api/v3/{store,admin}/brands_controller_spec.rb (managed)
+server/spec/integration/admin/brands_spec.rb                        (managed — rswag, documents the Admin API)
 server/config/routes.rb                                             (idempotent inject)
 server/config/initializers/spree.rb                                 (idempotent append — register_scope)
 server/config/locales/spree_brands.en.yml                           (owned-once — permission label)
@@ -151,6 +153,7 @@ end
 
    Edit the list to drop columns clients shouldn't write — but the controllers are managed, so a re-run restores the template.
 6. **Run the specs** — `spree rspec spec/controllers/spree/api/v3/`. The specs use the `'API v3 Store guest'` / `'API v3 Admin authenticated'` shared contexts from `spree_api`'s testing support (see `spree-testing`).
+7. **Document it** — fill in the integration spec's descriptions, add specs for any custom member actions, then `spree task openapi:generate` and commit `openapi/admin.yaml` (next section).
 
 ## Adding a status
 
@@ -163,9 +166,110 @@ has_status :draft, :active, :archived, default: :draft   # predicates (active?),
 
 Extensions append statuses with `Spree::Brand.add_status('paused', after: 'active')`. Don't use Rails enums for status.
 
+## Documenting endpoints (OpenAPI)
+
+Since 6.0.3 a custom endpoint is documented the way core documents its own: rswag integration specs, generated into an OpenAPI file you commit. That one file drives three things:
+
+- **Agent tools.** Spree merges every engine's and the app's `openapi/admin.yaml` into core's document at runtime. Each documented admin action other than CRUD becomes an Admin MCP / dashboard-assistant tool, with nothing to register (see `spree-mcp`).
+- **Typed SDK clients.** `spree sdk generate` builds an SDK extension package from the document (see `spree-typescript-sdk`).
+- **API reference.** Spree's own docs and SDKs use core's document only. Build yours from your own file.
+
+### Setup
+
+- **Projects from `create-spree-app`** already ship `server/spec/swagger_helper.rb` and `server/spec/agent_tools_spec.rb`.
+- **Older projects or extensions** need `spree_dev_tools` 1.0.1 or later (Spree 6.0.3+):
+
+  ```bash
+  spree generate spree_dev_tools:openapi          # app (classic: bin/rails g spree_dev_tools:openapi)
+  bundle exec rails g spree_dev_tools:openapi     # extension, from its own directory
+  ```
+
+The generator writes three things:
+
+- `spec/swagger_helper.rb`, which requires `spree_dev_tools/rspec/openapi`.
+- The agent-tools contract spec.
+- A **skipped skeleton spec** for every admin action your controllers serve that isn't documented yet.
+
+Fill in each skeleton's description and response records, then remove the skip. Re-run the generator after adding endpoints; it only writes what's missing.
+
+### Writing a spec
+
+```ruby
+# spec/integration/admin/supplier_syncs_spec.rb
+require 'swagger_helper'
+
+RSpec.describe 'Supplier syncs', type: :request, swagger_doc: 'openapi/admin.yaml' do
+  let(:supplier) { create(:supplier) }
+
+  path '/api/v3/admin/suppliers/{id}/sync' do
+    parameter name: :id, in: :path, type: :string, required: true, description: 'Supplier ID'
+    let(:id) { supplier.prefixed_id }
+
+    post 'Sync a supplier' do
+      tags 'Suppliers'
+      admin_operation :write, :purchasing, description: <<~DESC
+        Pulls the supplier's current catalogue and stock. Use it before raising a
+        purchase order, so the order uses today's prices.
+      DESC
+      request_body_for
+
+      response '200', 'synced' do
+        let(:body) { { full: true } }
+        run_test!
+      end
+    end
+  end
+end
+```
+
+| Helper | What it does |
+|---|---|
+| `admin_operation :read\|:write, :<scoped_resource>, description:` | Adds the content types, both auth schemes (`X-Spree-Api-Key` / Bearer) and the scope note to the description. Signs in as an admin and a secret key; a response block can override either with its own `let`. |
+| `request_body_for(action = nil, controller: nil, required: true)` | Documents the body from the controller's `request_params` declaration. That one declaration also permits the request, and it produces the tool arguments and the SDK `params/` types. |
+| `filter_parameters_for(controller = nil, search: '…', scopes: {})` | Documents `q[...]` list filters from the model's ransack allowlists. It adds the filter table and the `x-spree-filters` data used to generate SDK `filters.ts`. Pass `search:` when the model's search isn't declared with `search_by`. |
+| `query_parameters_for(shape)` | Documents a named query-param shape for a read endpoint. |
+| `admin_scope_note 'text'` | A free-form scope note, for endpoints whose scope is resolved at request time. |
+| `agent_tool false, reason: '…'` / `agent_tool true` | Opts a write out of agent tools (a reason is required) or opts a read in. See `spree-mcp`. |
+| `operationId 'quotes_resend'` | Overrides the derived tool and SDK method name. Use it when two operations would collide. |
+
+**Writing good summaries and descriptions.** The summary is the first line; the description is the paragraph that follows. Agents choose tools by this text, and the SDK puts it in JSDoc. Describe what the operation does and when to use it, not how it's implemented.
+
+### Generating and committing
+
+```bash
+spree task openapi:generate          # app → server/openapi/admin.yaml  (classic: bin/rails spree:openapi:generate)
+bundle exec rake spree:openapi:generate   # extension → openapi/admin.yaml (+ openapi/store.yaml)
+```
+
+- The task runs `spec/integration/**/*_spec.rb` through rswag's formatter with `OPENAPI=true`, so the output is deterministic. A diff in the file means the API changed. Override the pattern with `PATTERN=…`.
+- Commit the YAML, and regenerate it whenever an endpoint, its `request_params` or its filters change.
+- In an extension the task comes from `spree/testing_support/extension_rake`, which its Rakefile already requires. In an app it's built into `spree_api`.
+- Specs that fail produce no operations. Run the integration specs green first.
+
+**Store API endpoints (extensions).** Pass `store_title:` to `Spree::Api::TestingSupport::Openapi.configure(config, engine:, title:, store_title:)` in `spec/swagger_helper.rb`. Then name the document in each Store spec and authenticate as a customer:
+
+```ruby
+get 'List quotes', openapi_spec: 'openapi/store.yaml' do
+  include_context 'API v3 Store authenticated'
+```
+
+**Shipping it in a gem.** A gemspec built from `git ls-files` already includes the YAML. A hand-listed one needs `'openapi/*.yaml'` added to `s.files`.
+
+**Keeping it honest.** `spec/agent_tools_spec.rb` fails when:
+
+- an admin action has no documented operation,
+- an opt-out has no reason,
+- two actions derive one tool name,
+- the document conflicts with core's.
+
+Keep it in CI, and add `spree task openapi:generate && git diff --exit-code openapi/` to catch an uncommitted document.
+
 ## TypeScript types
 
-In a project, serializers you generate are app-local — they're not in the published `@spree/sdk` / `@spree/admin-sdk` types. Call custom endpoints via `client.request<T>(...)` with hand-written types (see `spree-typescript-sdk`). The generated serializer's `typelize` line documents the JSON types (decimals serialize as strings).
+Serializers you generate are app-local. They aren't in the published `@spree/sdk` / `@spree/admin-sdk` types. Choose the client by who uses it:
+
+- **One app calling its own endpoints.** Use `client.request<T>(...)` with types written by hand from the serializer. The generated serializer's `typelize` line documents the JSON types; decimals serialize as strings.
+- **An extension shipping a client.** Document the endpoints (above), then run `spree sdk generate` in an npm package. It writes typed `define*Extension` namespaces, request/filter/response types, and an `extend…Client` helper. See `spree-typescript-sdk`.
 
 ## Common patterns
 
@@ -209,5 +313,7 @@ Use it when the record is internal (log, join table), only reachable through a p
 
 - `node_modules/@spree/docs/dist/developer/tutorial/model-and-api.md` — end-to-end Brand walkthrough
 - `node_modules/@spree/docs/dist/developer/customization/permissions.md` — `register_scope`
-- `node_modules/@spree/docs/dist/developer/customization/api.md` — extending the API
+- `node_modules/@spree/docs/dist/developer/customization/api.md` — extending the API, and "From an endpoint to agent tools and an SDK client"
+- `https://spreecommerce.org/docs/developer/mcp/custom-tools` — documenting endpoints for agents
+- rswag helpers: `spree/api/lib/spree/api/testing_support/{openapi,filter_parameters,agent_tools}.rb`
 - Generator source: `spree/core/lib/generators/spree/{api_resource,model}/`

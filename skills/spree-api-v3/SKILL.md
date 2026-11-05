@@ -1,6 +1,6 @@
 ---
 name: spree-api-v3
-description: Use when the user is calling or debugging Spree 6's REST API v3 — the Store API (storefronts, mobile apps, customers), the Admin API (integrations, back-office tools) or the Seller API (marketplace sellers). Covers auth (publishable/secret keys, JWT audiences), scopes and permissions, prefixed IDs, the cart → order split, checkout `requirements[]`, order statuses, the `{data, meta}` envelope, expand/fields, Ransack filters, errors, idempotency, localization headers and rate limits. Common phrasings include "Spree API", "Store API", "Admin API", "publishable key", "secret key", "X-Spree-Api-Key", "X-Spree-Token", "API scopes", "403 required_scope", "cart_ vs or_", "complete cart", "cart 404 after checkout", "prefixed IDs", "expand", "Idempotency-Key", "429 rate limit", "v3 endpoint". For ADDING a new endpoint use spree-resource; for roles/permissions internals use spree-auth-permissions.
+description: Use when the user is calling or debugging Spree 6's REST API v3 — the Store API (storefronts, mobile apps, customers), the Admin API (integrations, back-office tools) or the Seller API (marketplace sellers). Covers auth (publishable/secret keys, JWT audiences), scopes and permissions, prefixed IDs, the cart → order split, checkout `requirements[]`, order statuses, the `{data, meta}` envelope, expand/fields, Ransack filters, errors, idempotency, localization headers and rate limits. Common phrasings include "Spree API", "Store API", "Admin API", "publishable key", "secret key", "X-Spree-Api-Key", "X-Spree-Token", "API scopes", "403 required_scope", "cart_ vs or_", "complete cart", "cart 404 after checkout", "prefixed IDs", "expand", "Idempotency-Key", "429 rate limit", "v3 endpoint", "Admin API OpenAPI spec". For ADDING or documenting (OpenAPI) a new endpoint use spree-resource; for AI agents driving the store over MCP use spree-mcp; for roles/permissions internals use spree-auth-permissions.
 ---
 
 # Spree API v3
@@ -13,7 +13,7 @@ Spree 6 has three REST surfaces under `/api/v3/`, and they share one set of conv
 | **Admin API** | `/api/v3/admin/*` | Integrations, back-office apps, the dashboard | `X-Spree-Api-Key: sk_…` **or** `Authorization: Bearer <jwt>` (`aud: admin_api`) | Key scopes / role permission keys |
 | **Seller API** | `/api/v3/seller/*` | Marketplace seller panel | Seller JWT (`aud: seller_api`) + `X-Spree-Seller-Id` | Seller role keys + `current_seller` scoping (see `spree-marketplace`) |
 
-A token issued for one audience is rejected on the other surfaces. The v2 Storefront/Platform APIs don't exist in Spree 6. If you're migrating an old integration, see `node_modules/@spree/docs/dist/api-reference/store-api/migrating-from-storefront-api-v2.md`.
+A token issued for one audience is rejected on the other surfaces. The Admin MCP server (`/api/v3/admin/mcp`) sits beside the Admin API but takes only per-person OAuth tokens, never `sk_` keys (see `spree-mcp`). The v2 Storefront/Platform APIs don't exist in Spree 6. If you're migrating an old integration, see `node_modules/@spree/docs/dist/api-reference/store-api/migrating-from-storefront-api-v2.md`.
 
 ## Store API
 
@@ -90,6 +90,16 @@ Everything (avoid) ........ write_all
 ```
 
 Staff roles are data (`/api/v3/admin/roles`). See `spree-auth-permissions`.
+
+### Product status
+
+To change one product's status, use `PATCH /products/{id}/activate`, `/archive` or `/draft` (6.0.3+). Each runs the status workflow and emits the matching product event, so webhook subscribers hear about it.
+
+- These actions refuse a product that's awaiting a marketplace review. Move those with `approve`/`reject`.
+- For many products, `POST /products/bulk_status_update { ids, status }` writes the status column directly and skips products in review.
+- Prefer the single-product actions whenever subscribers need to see the change.
+
+Product lists in both the Admin and Seller APIs return `total_on_hand`, the units in stock summed across all variants.
 
 ### Admin-only response traits
 
@@ -190,6 +200,16 @@ Built on Rails `rate_limit`, with counters in `Rails.cache`. That cache must be 
 
 Responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining` and, when limited, `Retry-After`. Inbound payment/fulfillment webhook endpoints have their own fixed limit of 120/min.
 
+## Custom endpoints and OpenAPI
+
+Endpoints you add (`spree:api_resource`, or controllers in an extension) follow every convention above. Document them with rswag specs and generate `openapi/admin.yaml` (and `openapi/store.yaml` for extensions) using `spree task openapi:generate`. That committed document drives three things:
+
+- **Agent tools.** Each documented admin action becomes an MCP tool (`spree-mcp`).
+- **SDK clients.** `spree sdk generate` builds a typed client from it (`spree-typescript-sdk`).
+- **Your API reference.**
+
+How to write the specs is in `spree-resource` § Documenting endpoints.
+
 ## Debugging recipes
 
 - **401 everywhere**: a `pk_` key sent to the Admin API or an `sk_` key to the Store API; a revoked key; an admin JWT older than 5 minutes (refresh via the cookie); a customer token sent to the Admin API (wrong `aud`).
@@ -200,8 +220,11 @@ Responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining` and, when limited
 
 ## Where to read further
 
-- OpenAPI specs (authoritative): `node_modules/@spree/docs/dist/api-reference/store.yaml`, `admin.yaml`, `seller.yaml`
+- OpenAPI specs (authoritative):
+  - **Store:** `node_modules/@spree/docs/dist/api-reference/store.yaml`. It's the only spec `@spree/docs` bundles.
+  - **Admin:** `spree api endpoints` / `spree api schema` read the copy bundled in the CLI, offline.
+  - **Admin and Seller:** the `spree-docs` MCP server mounts `/openapi/api-reference/{admin,seller}.yaml`. GitHub has `docs/api-reference/{admin,seller}.yaml` at your Spree tag.
 - Store API guides: `node_modules/@spree/docs/dist/api-reference/store-api/` (authentication, localization, idempotency, rate limiting, querying, relations)
 - Admin API guides: `node_modules/@spree/docs/dist/api-reference/admin-api/` (authentication, errors, querying)
 - Webhook events: `node_modules/@spree/docs/dist/api-reference/webhooks-events.md`
-- Related skills: `spree-auth-permissions`, `spree-typescript-sdk`, `spree-cli`, `spree-resource` (add endpoints), `spree-checkout`, `spree-marketplace` (Seller API), `spree-events-webhooks`.
+- Related skills: `spree-auth-permissions`, `spree-typescript-sdk`, `spree-cli`, `spree-resource` (add + document endpoints), `spree-mcp` (AI agents), `spree-checkout`, `spree-marketplace` (Seller API), `spree-events-webhooks`.
