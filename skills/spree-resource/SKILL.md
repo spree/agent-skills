@@ -262,7 +262,7 @@ get 'List quotes', openapi_spec: 'openapi/store.yaml' do
 - two actions derive one tool name,
 - the document conflicts with core's.
 
-Keep it in CI, and add `spree task openapi:generate && git diff --exit-code openapi/` to catch an uncommitted document.
+Keep it in CI, and add a check that catches an uncommitted document: `spree task openapi:generate && git diff --exit-code server/openapi/` in an app, or `bundle exec rake spree:openapi:generate && git diff --exit-code openapi/` in an extension.
 
 ## TypeScript types
 

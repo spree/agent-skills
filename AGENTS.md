@@ -55,8 +55,8 @@ All share prefixed IDs (`prod_…`, `cart_…`, `or_…`, `variant_…`), `{ dat
 
 ### OpenAPI and agent tools
 
-- Document custom Admin (and extension Store) endpoints with rswag specs (`admin_operation`, `request_body_for`, `filter_parameters_for`) and commit the generated `openapi/admin.yaml` (`spree task openapi:generate`; in a gem `bundle exec rake spree:openapi:generate`).
-- Every documented admin action other than CRUD becomes an Admin MCP tool automatically — write summaries/descriptions for the model. Opt out with `agent_tool false, reason: '…'`. Only non-endpoint capabilities need a hand-written `Spree::AgentTool` in `Spree.admin_agent_tools`.
+- Document custom Admin (and extension Store) endpoints with rswag specs (`admin_operation`, `request_body_for`, `filter_parameters_for`) and commit the generated documents: `openapi/admin.yaml`, plus `openapi/store.yaml` for an extension with Store endpoints (`spree task openapi:generate`; in a gem `bundle exec rake spree:openapi:generate`).
+- Every documented admin write action other than CRUD becomes an Admin MCP tool automatically — write summaries/descriptions for the model. Opt a write out with `agent_tool false, reason: '…'`; a custom read becomes a tool only with `agent_tool true`. Only non-endpoint capabilities need a hand-written `Spree::AgentTool` in `Spree.admin_agent_tools`.
 - The Admin MCP endpoint (`/api/v3/admin/mcp`) accepts per-person OAuth only — never an `sk_` key.
 
 ## Project layout and commands

@@ -202,7 +202,7 @@ Responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining` and, when limited
 
 ## Custom endpoints and OpenAPI
 
-Endpoints you add (`spree:api_resource`, or controllers in an extension) follow every convention above. Document them with rswag specs and generate `openapi/admin.yaml` (and `openapi/store.yaml` for extensions) using `spree task openapi:generate`. That committed document drives three things:
+Endpoints you add (`spree:api_resource`, or controllers in an extension) follow every convention above. Document them with rswag specs, then generate the OpenAPI document: `spree task openapi:generate` in an app (writes `server/openapi/admin.yaml`), or `bundle exec rake spree:openapi:generate` in an extension (writes `openapi/admin.yaml`, and `openapi/store.yaml` for Store endpoints). That committed document drives three things:
 
 - **Agent tools.** Each documented admin action becomes an MCP tool (`spree-mcp`).
 - **SDK clients.** `spree sdk generate` builds a typed client from it (`spree-typescript-sdk`).
