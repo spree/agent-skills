@@ -33,7 +33,7 @@ If `spree` isn't on PATH, use `npx spree …` / `pnpm exec spree …`. The CLI a
 | Install + run migrations | `spree migrate` | `bin/rails spree:install:migrations && bin/rails db:migrate` |
 | Generator | `spree generate api_resource Brand …` (bare names auto-prefix `spree:`) | `bin/rails g spree:api_resource Brand …` |
 | Run specs | `spree test spec/models/…` (RAILS_ENV=test) | `bundle exec rspec spec/models/…` |
-| Rake task | `spree exec bin/rake <task>` / `spree task <name>` (auto `spree:` prefix) | `bundle exec rake <task>` |
+| Rake task | `spree task <name>` for Spree tasks (the CLI adds `spree:`, so leave it off); `spree exec bin/rake <task>` for any other | `bundle exec rake <task>` |
 | Sample data | `spree sample-data` (default store; another store: `spree task load_sample_data STORE_CODE=eu`) | `bin/rails spree:load_sample_data` (`STORE_ID=store_…` or `STORE_CODE=…` to target a non-default store) |
 | Version upgrade | `spree upgrade` | `bundle update spree…`, migrate, `bin/rails spree:upgrade` |
 | Anything else | `spree exec <cmd>` | `<cmd>` |
@@ -109,8 +109,8 @@ spree console | shell | db:console
 spree migrate | migrate:status | migrate:rollback
 spree generate api_resource Brand name:string   # → spree:api_resource
 spree generate subscriber ErpSync order.placed   # class + registration in initializers/spree.rb
-spree test [path[:line]]      # tests in RAILS_ENV=test (first: spree exec bin/rails db:test:prepare)
-spree add --gem <gem>         # gem lands in the bundle_cache volume, no rebuild
+spree test [path[:line]]      # tests in RAILS_ENV=test; creates the test DB if missing (CLI 3.6+; older: spree rspec)
+spree add --gem <gem>         # adds the gem, runs its installer + migrations; a prebuilt project is ejected first (asks; new dev DB)
 spree eject                    # build from server/ instead of the prebuilt image
 spree build [--production]     # rebuild dev image / build the production image (API + dashboard)
 spree add dashboard            # add apps/dashboard (also: spree add seller-dashboard)

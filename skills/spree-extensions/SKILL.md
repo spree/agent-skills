@@ -21,7 +21,10 @@ There are no views to add: Spree 6 has no Rails admin and no Rails storefront. S
 ## Installing an extension gem
 
 ```bash
-spree add --gem spree_reviews          # or edit server/Gemfile, then `spree exec bundle install`
+spree add --gem spree_reviews          # adds the gem, runs spree_reviews:install and migrations, restarts the server
+
+# By hand instead: edit server/Gemfile, then
+spree exec bundle install
 spree generate spree_reviews:install    # convention: every extension ships <gem>:install
 spree migrate
 spree restart                           # Gemfile changes need a full restart (Ctrl+C `spree dev` if running)

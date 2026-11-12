@@ -71,7 +71,7 @@ Hooks to override on a subclass: `session_required?`, `setup_session_supported?`
 spree add stripe      # adds the gem, runs its installer and migrations
 spree add adyen
 spree add paypal
-spree add --gem spree_razorpay_checkout && spree generate spree_razorpay_checkout:install
+spree add --gem spree_razorpay_checkout   # not in the catalog; also runs its installer
 spree restart
 ```
 

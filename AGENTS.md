@@ -71,8 +71,8 @@ spree stop | restart | logs
 spree console | shell | db:console
 spree migrate | migrate:status | migrate:rollback
 spree generate <args>       # bare names auto-prefix to `spree:` (`api_resource` → `spree:api_resource`)
-spree test [path[:line]]   # run specs in RAILS_ENV=test
-spree task <name>                 # Spree rake tasks; `spree:` prefix optional
+spree test [path[:line]]   # run specs in RAILS_ENV=test (CLI 3.6+; older CLIs: spree rspec)
+spree task <name>                 # Spree rake tasks; the CLI adds `spree:`, so leave it off
 spree exec <command>              # anything else in the container, e.g. `spree exec bin/rails routes`
 spree seed | sample-data | user create | api-key create|list|revoke
 spree encryption init [--print]   # add ACTIVE_RECORD_ENCRYPTION_* keys to .env (never overwrites)
