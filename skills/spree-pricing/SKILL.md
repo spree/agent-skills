@@ -144,7 +144,7 @@ Every change to a **base** price amount writes a `Spree::PriceHistory` row (pric
   await admin.store.update({ preferred_track_price_history: false })   // non-EU store
   ```
 - Store API: `?expand=prior_price` on products/variants → `{ amount, currency, display_amount, recorded_at }`.
-- Rake: `spree rake spree:price_history:seed` (one-time baseline, skips prices that already have history), `spree rake spree:price_history:prune` (schedule it — e.g. a Solid Queue recurring task).
+- Rake: `spree task price_history:seed` (one-time baseline, skips prices that already have history), `spree task price_history:prune` (schedule it — e.g. a Solid Queue recurring task).
 
 ## Bulk updates
 

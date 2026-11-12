@@ -1,6 +1,14 @@
 ---
 name: spree-reporting
-description: Use when adding or changing analytics, reports, dashboard numbers, or CSV imports/exports in a Spree 6 project. Covers the `Spree.reporting` semantic layer (metrics, dimensions, counters, bases, `replace: true` overrides), `Spree::Reporting::Query`, authorization via `subject` + `key_scope`, saved reports (`Spree::SavedReport`), and the async CSV pipeline (`Spree::Export` / `Spree::Import` subclasses, import statuses, retrying failed rows, resumable processing). Common phrasings include "add a custom metric", "report sales by brand/seller/warehouse", "add a dashboard counter", "why don't the report rows add up to the total", "export orders to CSV", "add a custom export/import type", "import products from a spreadsheet", "retry failed import rows".
+description: >-
+  Use when adding or changing analytics, reports, dashboard numbers, or CSV imports/exports in a Spree
+  6 project. Covers the `Spree.reporting` semantic layer (metrics, dimensions, counters, bases,
+  `replace: true` overrides), `Spree::Reporting::Query`, authorization via `subject` + `key_scope`,
+  saved reports (`Spree::SavedReport`), and the async CSV pipeline (`Spree::Export` / `Spree::Import`
+  subclasses, import statuses, retrying failed rows, resumable processing). Common phrasings include
+  "add a custom metric", "report sales by brand/seller/warehouse", "add a dashboard counter", "why
+  don't the report rows add up to the total", "export orders to CSV", "add a custom export/import
+  type", "import products from a spreadsheet", "retry failed import rows".
 ---
 
 # Reporting, Imports & Exports

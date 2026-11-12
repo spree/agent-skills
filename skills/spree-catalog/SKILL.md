@@ -215,7 +215,7 @@ Walk this list:
 3. Published on the request's channel? `product.publication_for(channel)` / `Spree::Product.for_channel(channel)`; window open?
 4. Has a base price in the request currency? `product.default_variant.price_in('EUR').persisted?` — products without a price in the current currency are hidden.
 5. B2B: the buyer's catalogs may restrict the assortment (`Spree.products_for_context_service`) — see `spree-b2b`. The same visible set gates anything that takes a variant from the shopper (e.g. wishlist items): a variant the listing wouldn't show is refused.
-6. Meilisearch index stale? `spree rake spree:search:reindex`.
+6. Meilisearch index stale? `spree task search:reindex`.
 
 ## Search
 
@@ -224,11 +224,11 @@ Walk this list:
 | Provider | Setup |
 |---|---|
 | `Spree::SearchProvider::Database` (default) | Nothing. ILIKE + Ransack; fine for small catalogs. No indexing. |
-| `SpreeMeilisearch::SearchProvider` | Add `gem 'spree_meilisearch'` + `spree bundle install`, set `MEILISEARCH_URL` (and `MEILISEARCH_API_KEY` in production), set `Spree.search_provider = 'SpreeMeilisearch::SearchProvider'` in `config/initializers/spree.rb`, then reindex. Typo tolerance, relevance, fast facets. |
+| `SpreeMeilisearch::SearchProvider` | Run `spree add meilisearch`, set `MEILISEARCH_URL` (and `MEILISEARCH_API_KEY` in production), set `Spree.search_provider = 'SpreeMeilisearch::SearchProvider'` in `config/initializers/spree.rb`, then reindex. Typo tolerance, relevance, fast facets. |
 | Your own | Subclass `Spree::SearchProvider::Base`; implement `search_and_filter(scope:, query:, filters:, sort:, page:, limit:)` (returns a `SearchResult`), `self.indexing_required?`, `index`, `remove`, `remove_by_id`, `index_batch`, `reindex`. |
 
 ```bash
-spree rake spree:search:reindex        # per store; no-op work for the Database provider
+spree task search:reindex        # per store; no-op work for the Database provider
 ```
 
 - Index documents are shaped by `Spree::Dependencies.search_product_presenter` (set to `SpreeMeilisearch::ProductPresenter` by the gem; core ships none). Swap it to add fields; `product.search_presentation` previews the documents (one per locale × currency).

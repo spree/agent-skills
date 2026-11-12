@@ -152,7 +152,7 @@ end
    ```
 
    Edit the list to drop columns clients shouldn't write — but the controllers are managed, so a re-run restores the template.
-6. **Run the specs** — `spree rspec spec/controllers/spree/api/v3/`. The specs use the `'API v3 Store guest'` / `'API v3 Admin authenticated'` shared contexts from `spree_api`'s testing support (see `spree-testing`).
+6. **Run the specs** — `spree test spec/controllers/spree/api/v3/`. The specs use the `'API v3 Store guest'` / `'API v3 Admin authenticated'` shared contexts from `spree_api`'s testing support (see `spree-testing`).
 7. **Document it** — fill in the integration spec's descriptions, add specs for any custom member actions, then `spree task openapi:generate` and commit `openapi/admin.yaml` (next section).
 
 ## Adding a status
