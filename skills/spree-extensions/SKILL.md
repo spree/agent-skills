@@ -21,7 +21,10 @@ There are no views to add: Spree 6 has no Rails admin and no Rails storefront. S
 ## Installing an extension gem
 
 ```bash
-spree bundle add spree_reviews          # or edit server/Gemfile, then `spree bundle install`
+spree add --gem spree_reviews          # adds the gem, runs spree_reviews:install and migrations, restarts the server
+
+# By hand instead: edit server/Gemfile, then
+spree exec bundle install
 spree generate spree_reviews:install    # convention: every extension ships <gem>:install
 spree migrate
 spree restart                           # Gemfile changes need a full restart (Ctrl+C `spree dev` if running)
@@ -216,7 +219,7 @@ Uses RSpec + Factory Bot via `spree_dev_tools`. Put your factories in `lib/spree
 - **Registered in the wrong phase = silently missing.** A payment method, fulfillment provider or integration appended outside `after_initialize` disappears at boot (core reassigns those arrays). Symptom: not selectable in the dashboard / "type must be registered" 422.
 - **`additional_permitted_attributes << :x`** raises `FrozenError`. Always `+=`.
 - **Admin controller without `scoped_resource`** raises at request time — every Admin API controller must name its permission scope.
-- **Migrations don't auto-apply.** After bumping an extension, re-run its install generator (or `spree rails railties:install:migrations`) then `spree migrate`. `spree migrate` alone only installs core migrations.
+- **Migrations don't auto-apply.** After bumping an extension, re-run its install generator (or `spree exec bin/rails railties:install:migrations`) then `spree migrate`. `spree migrate` alone only installs core migrations.
 - **Don't rename copied migrations** — the `.<engine_name>.rb` suffix is how Rails skips already-copied ones and how Spree's boot check spots missing ones.
 - **Credentials belong in a `Spree::Integration`** (per store, `:password` preferences are masked), not ENV — a multi-store app pays/ships from different accounts.
 - **Two decorators on the same method** — last loaded wins. Prefer hooks/events so extensions compose.

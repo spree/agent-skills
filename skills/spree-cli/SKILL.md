@@ -1,6 +1,16 @@
 ---
 name: spree-cli
-description: Use when calling the Spree 6 Admin API from the command line or driving it programmatically as an agent — exploring endpoints, reading or mutating store data, and especially DEBUGGING (inspecting an order/product/customer, checking why a request failed, reproducing a 403/422). The `spree api` command group in `@spree/cli` is a `gh api`-style generic HTTP client: `spree api get|post|patch|delete <path>` plus offline discovery (`spree api endpoints`, `spree api schema`). Common phrasings include "spree api", "spree CLI", "call the admin API from the terminal", "spree api get", "inspect this order", "why is this Spree request failing", "list admin endpoints", "spree auth". Also covers the project-side dev commands agents reach for while debugging (`spree shell`, `spree rspec`, `spree console`, `spree add`, `spree plugin new`). For SDK/TypeScript integration use spree-typescript-sdk; for raw API protocol details use spree-api-v3.
+description: >-
+  Use when calling the Spree 6 Admin API from the command line or driving it programmatically as an
+  agent — exploring endpoints, reading or mutating store data, and especially DEBUGGING (inspecting an
+  order/product/customer, checking why a request failed, reproducing a 403/422). The `spree api`
+  command group in `@spree/cli` is a `gh api`-style generic HTTP client: `spree api
+  get|post|patch|delete <path>` plus offline discovery (`spree api endpoints`, `spree api schema`).
+  Common phrasings include "spree api", "spree CLI", "call the admin API from the terminal", "spree
+  api get", "inspect this order", "why is this Spree request failing", "list admin endpoints", "spree
+  auth". Also covers the project-side dev commands agents reach for while debugging (`spree shell`,
+  `spree test`, `spree console`, `spree add`, `spree plugin new`). For SDK/TypeScript integration use
+  spree-typescript-sdk; for raw API protocol details use spree-api-v3.
 ---
 
 # Spree CLI — Admin API from the terminal
@@ -142,7 +152,7 @@ In a scaffolded project (Docker dev stack), these commands run inside the web co
 ```bash
 spree console                           # Rails console: Spree::Cart.find_by_prefix_id!('cart_…')
 spree shell                             # interactive bash in the web container (alias: spree bash)
-spree rspec spec/models/spree/brand_spec.rb:15   # RSpec with RAILS_ENV=test; args pass straight through
+spree test spec/models/spree/brand_spec.rb:15   # RSpec with RAILS_ENV=test; args pass straight through
 spree logs                              # web logs (spree logs worker for jobs)
 spree db:console                        # psql against the dev database
 spree add dashboard                     # scaffold apps/dashboard (or: spree add seller-dashboard)
@@ -166,7 +176,7 @@ spree sdk generate --check       # CI: fail when generated files are stale
 
 See `spree-typescript-sdk` § Generating an extension's client.
 
-`spree shell` and `spree rspec` still work when the web container is crash-looping: they fall back to a one-off `compose run`.
+`spree shell` and `spree test` still work when the web container is crash-looping: they fall back to a one-off `compose run`.
 
 ### What `spree api` can't see
 

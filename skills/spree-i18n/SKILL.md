@@ -164,7 +164,7 @@ Spree.t(:paid, scope: 'payment_states')
 Spree.t('custom_feature.title', default: 'Rewards')
 ```
 
-- Add community translations: `spree bundle add spree_i18n` (40+ locales, picked up automatically).
+- Add community translations: `spree add --gem spree_i18n` (40+ locales, picked up automatically).
 - Override or add keys in your app's `config/locales/<locale>.yml` under `<locale>.spree.*` — the app's files load last.
 - Enable Rails fallbacks with `config.i18n.fallbacks = [:en]` in `config/application.rb` (setting `I18n.fallbacks` in an initializer doesn't enable the backend module). Production.rb usually has `config.i18n.fallbacks = true`.
 - `Spree::BaseMailer` configures the store's Mobility fallbacks, so translated data in emails resolves like in the API.

@@ -79,9 +79,9 @@ After a partial failure, fix the cause and re-run only that step (skips bundle +
 spree upgrade --step migrate_returns        # or: STEP=migrate_returns bundle exec rake spree:upgrade
 ```
 
-Step ids come from the plan output. If the same id exists in two manifests the task aborts and asks for `TO=` to disambiguate. Some tasks take their own env knobs (`BATCH_SIZE`, `SKIP_INVALID_ROWS=true`, …) — they're documented in each step's `notes`; pass them the same way (`spree rake spree:upgrade STEP=… BATCH_SIZE=200`, or `spree exec env BATCH_SIZE=200 bin/rake …`).
+Step ids come from the plan output. If the same id exists in two manifests the task aborts and asks for `TO=` to disambiguate. Some tasks take their own env knobs (`BATCH_SIZE`, `SKIP_INVALID_ROWS=true`, …) — they're documented in each step's `notes`; pass them the same way (`spree task upgrade STEP=… BATCH_SIZE=200`, or `spree exec env BATCH_SIZE=200 bin/rake …`).
 
-You can also invoke the underlying task directly — `spree rake <task>` / `bundle exec rake <task>` — which is handy for tasks that aren't in any manifest.
+You can also invoke the underlying task directly — `spree exec bin/rake <task>` / `bundle exec rake <task>` — which is handy for tasks that aren't in any manifest.
 
 ## Cap the version
 
@@ -123,7 +123,7 @@ Order matters: **migrate → backfill → serve new code**. Some steps are safet
 ## Gotchas
 
 - **`--plan` printing nothing (or only old manifests)** means the gems aren't bumped yet — the plan comes from the installed `spree_core`.
-- **`bundle update` fails in the container** → you're on the prebuilt image; `spree eject` first, or the bundle is out of sync (`spree bundle install`).
+- **`bundle update` fails in the container** → you're on the prebuilt image; `spree eject` first, or the bundle is out of sync (`spree exec bundle install`).
 - **A step aborts on purpose.** Several 6.0 tasks refuse to continue on data they can't convert faithfully (e.g. `migrate_users_to_customers`, `migrate_returns`) and print the offending ids plus the env var that overrides. Read the message; don't blindly re-run.
 - **Never skip ahead.** Manifests assume their `from` version's schema. Jumping minors is fine (the walk catches up); skipping a required landing version (5.6 before 6.0) is not.
 

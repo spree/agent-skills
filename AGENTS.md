@@ -71,9 +71,9 @@ spree stop | restart | logs
 spree console | shell | db:console
 spree migrate | migrate:status | migrate:rollback
 spree generate <args>       # bare names auto-prefix to `spree:` (`api_resource` → `spree:api_resource`)
-spree rspec [path[:line]]   # run specs in RAILS_ENV=test
-spree rake <task> | task <name>   # `task` auto-prefixes `spree:`
-spree rails <args> | bundle <args> | exec <command>
+spree test [path[:line]]   # run specs in RAILS_ENV=test (CLI 3.6+; older CLIs: spree rspec)
+spree task <name>                 # Spree rake tasks; the CLI adds `spree:`, so leave it off
+spree exec <command>              # anything else in the container, e.g. `spree exec bin/rails routes`
 spree seed | sample-data | user create | api-key create|list|revoke
 spree encryption init [--print]   # add ACTIVE_RECORD_ENCRYPTION_* keys to .env (never overwrites)
 spree add dashboard         # add apps/dashboard (also: spree add seller-dashboard | mcp | paypal)
@@ -93,8 +93,8 @@ For the full command reference see `dist/developer/cli/quickstart.md` in the ins
 ### Testing
 
 ```bash
-spree rspec                             # or, natively: bundle exec rspec
-spree rspec spec/models/...:42          # one example
+spree test                             # or, natively: bundle exec rspec
+spree test spec/models/...:42          # one example
 
 # Only when developing a Spree engine or extension:
 bundle exec rake test_app               # regenerate the dummy app (after schema changes)

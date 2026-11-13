@@ -181,7 +181,7 @@ The full namespace table, operator Admin endpoints and routes are in **[referenc
 - It ships **English, Arabic, German, French, Polish and Simplified Chinese** (`src/locales/{en,ar,de,fr,pl,zh-CN}.json`). Each seller user picks a language in the account dialog; it's saved as `selected_locale` on their account (`PATCH /seller/me`) and adopted at sign-in on any browser. Switching reloads the page. To add a language, drop another `src/locales/<code>.json` into the panel — it's discovered from the bundle files, not the API. There's no branding config: restyle through Tailwind and override translation keys for copy.
 - The account dialog edits the signed-in person (name, photo, language) via `PATCH /seller/me`; the seller business (public profile) is `PATCH /seller/profile`. Keep that split in custom UIs.
 
-For sample data in development, run `spree rake spree:sellers:sample_data` (native: `bin/rails spree:sellers:sample_data`). It signs in as `seller@example.com` / `spree123` and refuses to run outside development and test.
+For sample data in development, run `spree task sellers:sample_data` (native: `bin/rails spree:sellers:sample_data`). It signs in as `seller@example.com` / `spree123` and refuses to run outside development and test.
 
 ## Gotchas
 

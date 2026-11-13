@@ -1,6 +1,6 @@
 ---
 name: spree-testing
-description: Use when the user is writing or running automated tests for a Spree 6 app or extension — model specs, workflow/hook specs, subscriber specs, API v3 controller/request specs, factories, and dashboard (Vitest/Playwright) tests. Covers RSpec + Factory Bot (not Minitest/fixtures), spree_dev_tools, Spree's factories (:cart, :cart_ready_to_complete, :completed_order_with_totals …), the 'API v3 Store' / 'API v3 Admin' shared contexts, Spree::Current.store in tests, `spree rspec`, and common failures. Common phrasings include "test my Spree model", "Spree spec", "Spree factories", "spree_dev_tools", "include_context API v3", "test a workflow hook", "test a subscriber", "OrderWalkthrough", "Store must exist", "spree rspec", "dashboard tests".
+description: Use when the user is writing or running automated tests for a Spree 6 app or extension — model specs, workflow/hook specs, subscriber specs, API v3 controller/request specs, factories, and dashboard (Vitest/Playwright) tests. Covers RSpec + Factory Bot (not Minitest/fixtures), spree_dev_tools, Spree's factories (:cart, :cart_ready_to_complete, :completed_order_with_totals …), the 'API v3 Store' / 'API v3 Admin' shared contexts, Spree::Current.store in tests, `spree test`, and common failures. Common phrasings include "test my Spree model", "Spree spec", "Spree factories", "spree_dev_tools", "include_context API v3", "test a workflow hook", "test a subscriber", "OrderWalkthrough", "Store must exist", "spree test", "dashboard tests".
 ---
 
 # Spree Testing
@@ -42,12 +42,12 @@ Factory decorators in `spec/factories/spree/**/*_decorator.rb` are loaded automa
 ## Running
 
 ```bash
-spree rspec                                       # whole suite, in the web container, RAILS_ENV=test
-spree rspec spec/models/spree/brand_spec.rb:15    # file / line; any rspec flags pass through
+spree test                                       # whole suite, in the web container, RAILS_ENV=test
+spree test spec/models/spree/brand_spec.rb:15    # file / line; any rspec flags pass through
 bundle exec rspec …                               # classic app, from the app root
 ```
 
-`spree rspec` works from a cold stack (it falls back to a one-off container). After adding migrations in a classic app: `bin/rails db:test:prepare`.
+`spree test` works from a cold stack (it falls back to a one-off container). After adding migrations in a classic app: `bin/rails db:test:prepare`.
 
 ## Factories you'll use
 

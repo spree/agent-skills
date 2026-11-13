@@ -26,7 +26,7 @@ See the `spree-workflows` skill for the hook catalog. Swap a class only when you
 
 ## The seams
 
-`Spree::Core::Dependencies::INJECTION_POINTS_WITH_DEFAULTS` (in `spree_core`, `lib/spree/core/dependencies.rb`) defines **167 core injection points**; **106** of them are `*_workflow` keys. `Spree::Api::ApiDependencies::INJECTION_POINTS_WITH_DEFAULTS` (`spree_api`, `lib/spree/api/dependencies.rb`) holds **272 API points — serializers only**: 91 Store (`product_serializer`), 139 Admin (`admin_product_serializer`), 42 Seller (`seller_*_serializer`). (Counts from the 6.0 source; run `spree rake spree:dependencies:list` for your version.)
+`Spree::Core::Dependencies::INJECTION_POINTS_WITH_DEFAULTS` (in `spree_core`, `lib/spree/core/dependencies.rb`) defines **167 core injection points**; **106** of them are `*_workflow` keys. `Spree::Api::ApiDependencies::INJECTION_POINTS_WITH_DEFAULTS` (`spree_api`, `lib/spree/api/dependencies.rb`) holds **272 API points — serializers only**: 91 Store (`product_serializer`), 139 Admin (`admin_product_serializer`), 42 Seller (`seller_*_serializer`). (Counts from the 6.0 source; run `spree task dependencies:list` for your version.)
 
 Naming tells you the contract:
 
@@ -209,10 +209,10 @@ Syntax: `Spree.<key> = MyClass` (recommended — fails immediately on a typo'd c
 ## Inspecting overrides
 
 ```bash
-spree rake spree:dependencies:list        # every seam with its current value, [OVERRIDDEN] marked
-spree rake spree:dependencies:list | grep workflow
-spree rake spree:dependencies:overrides   # only overrides: default -> current (file:line that set it)
-spree rake spree:dependencies:validate    # constantize every seam; exits 1 on NameError — good CI check
+spree task dependencies:list        # every seam with its current value, [OVERRIDDEN] marked
+spree task dependencies:list | grep workflow
+spree task dependencies:overrides   # only overrides: default -> current (file:line that set it)
+spree task dependencies:validate    # constantize every seam; exits 1 on NameError — good CI check
 ```
 
 `overrides` is the first thing to run on an inherited project. Programmatic equivalents: `Spree::Dependencies.current_values`, `.overridden?(:cart_add_item_workflow)`, `.override_info(:cart_add_item_workflow)`, `.validate!`; `Spree::Api::Dependencies` for the API side. Legacy stash-only writes don't appear as overrides — grep initializers for `_service =` after upgrading.

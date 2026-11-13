@@ -40,7 +40,7 @@ description: Use when building a SaaS / multi-tenant platform on Spree 6 with th
    ```
 
 4. Docker only: pass the Keygen values to **every** `bundle install` in `server/Dockerfile` as BuildKit secrets (`RUN --mount=type=secret,id=keygen_license_key,env=KEYGEN_LICENSE_KEY ...`) and declare the secrets in both compose files. Never use `ARG`/`ENV` — that bakes the license into image layers.
-5. `spree bundle install` (or `bundle install`), then:
+5. `spree exec bundle install` (or `bundle install`), then:
 
    ```bash
    spree generate spree_enterprise:install && spree generate spree_multi_tenant:install

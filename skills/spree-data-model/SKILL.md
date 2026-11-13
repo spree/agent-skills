@@ -1,6 +1,16 @@
 ---
 name: spree-data-model
-description: Use when the user asks how Spree 6's domain models relate or where something is stored — Store/Channel/Market/Catalog, Product/Variant/Price/Category/Collection, Customer/Company/CustomerGroup, Cart vs Order, LineItem, TaxLine/Discount/Fee, Fulfillment/DeliveryMethod/StockLevel, Return/Exchange/Claim, Payment/PaymentSession/Refund/StoreCredit/GiftCard, Seller/OrderGroup, prefixed ID prefixes and document numbers. Phrasings: "how does X connect to Y", "what's the difference between Cart and Order", "Store vs Channel vs Market", "what statuses can a fulfillment have", "what prefix is `ful_`", "where are taxes stored", "how do I query orders". Architecture and relationships — for adding new models use spree-resource; for behavior use the domain skill (spree-checkout, spree-fulfillment, …).
+description: >-
+  Use when the user asks how Spree 6's domain models relate or where something is stored —
+  Store/Channel/Market/Catalog, Product/Variant/Price/Category/Collection,
+  Customer/Company/CustomerGroup, Cart vs Order, LineItem, TaxLine/Discount/Fee,
+  Fulfillment/DeliveryMethod/StockLevel, Return/Exchange/Claim,
+  Payment/PaymentSession/Refund/StoreCredit/GiftCard, Seller/OrderGroup, prefixed ID prefixes and
+  document numbers. Phrasings: "how does X connect to Y", "what's the difference between Cart and
+  Order", "Store vs Channel vs Market", "what statuses can a fulfillment have", "what prefix is
+  `ful_`", "where are taxes stored", "how do I query orders". Architecture and relationships — for
+  adding new models use spree-resource; for behavior use the domain skill (spree-checkout,
+  spree-fulfillment, …).
 ---
 
 # Spree Data Model (Spree 6)

@@ -68,10 +68,10 @@ Hooks to override on a subclass: `session_required?`, `setup_session_supported?`
 ### Installing a gateway
 
 ```bash
-spree bundle add spree_stripe && spree generate spree_stripe:install
-spree bundle add spree_adyen --github spree/spree_adyen && spree generate spree_adyen:install
-spree bundle add spree_paypal_checkout && spree generate spree_paypal_checkout:install
-spree bundle add spree_razorpay_checkout && spree generate spree_razorpay_checkout:install
+spree add stripe      # adds the gem, runs its installer and migrations
+spree add adyen
+spree add paypal
+spree add --gem spree_razorpay_checkout   # not in the catalog; also runs its installer
 spree restart
 ```
 

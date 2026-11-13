@@ -1,6 +1,13 @@
 ---
 name: spree-project
-description: Use for any work in a Spree Commerce 6 project — orienting in the repo (server/, apps/dashboard, apps/storefront), detecting the project flavor (create-spree-app + `spree` CLI vs a classic Rails app), running commands, following Spree conventions (Spree:: namespace, Spree.base_class, Spree.customer_class, current_store scoping, has_status, prefixed IDs, custom fields vs metadata), and finding the right docs. Activates broadly — "how does Spree work", "where do I put this", "how do I run X in my Spree app", "what are the Spree conventions", "set up a Spree project". Routes to spree-customization when the question is which extension pattern to use.
+description: >-
+  Use for any work in a Spree Commerce 6 project — orienting in the repo (server/, apps/dashboard,
+  apps/storefront), detecting the project flavor (create-spree-app + `spree` CLI vs a classic Rails
+  app), running commands, following Spree conventions (Spree:: namespace, Spree.base_class,
+  Spree.customer_class, current_store scoping, has_status, prefixed IDs, custom fields vs metadata),
+  and finding the right docs. Activates broadly — "how does Spree work", "where do I put this", "how
+  do I run X in my Spree app", "what are the Spree conventions", "set up a Spree project". Routes to
+  spree-customization when the question is which extension pattern to use.
 ---
 
 # Spree Commerce Project (Spree 6)
@@ -25,9 +32,9 @@ If `spree` isn't on PATH, use `npx spree …` / `pnpm exec spree …`. The CLI a
 | Shell in the container | `spree shell` | (you're already in one) |
 | Install + run migrations | `spree migrate` | `bin/rails spree:install:migrations && bin/rails db:migrate` |
 | Generator | `spree generate api_resource Brand …` (bare names auto-prefix `spree:`) | `bin/rails g spree:api_resource Brand …` |
-| Run specs | `spree rspec spec/models/…` (RAILS_ENV=test) | `bundle exec rspec spec/models/…` |
-| Rake task | `spree rake <task>` / `spree task <name>` (auto `spree:` prefix) | `bundle exec rake <task>` |
-| Sample data | `spree sample-data` (default store; another store: `spree rake spree:load_sample_data STORE_CODE=eu`) | `bin/rails spree:load_sample_data` (`STORE_ID=store_…` or `STORE_CODE=…` to target a non-default store) |
+| Run specs | `spree test spec/models/…` (RAILS_ENV=test) | `bundle exec rspec spec/models/…` |
+| Rake task | `spree task <name>` for Spree tasks (the CLI adds `spree:`, so leave it off); `spree exec bin/rake <task>` for any other | `bundle exec rake <task>` |
+| Sample data | `spree sample-data` (default store; another store: `spree task load_sample_data STORE_CODE=eu`) | `bin/rails spree:load_sample_data` (`STORE_ID=store_…` or `STORE_CODE=…` to target a non-default store) |
 | Version upgrade | `spree upgrade` | `bundle update spree…`, migrate, `bin/rails spree:upgrade` |
 | Anything else | `spree exec <cmd>` | `<cmd>` |
 
@@ -102,8 +109,8 @@ spree console | shell | db:console
 spree migrate | migrate:status | migrate:rollback
 spree generate api_resource Brand name:string   # → spree:api_resource
 spree generate subscriber ErpSync order.placed   # class + registration in initializers/spree.rb
-spree rspec [path[:line]]      # tests in RAILS_ENV=test (first: spree rails db:test:prepare)
-spree bundle add <gem>         # gem lands in the bundle_cache volume, no rebuild
+spree test [path[:line]]      # tests in RAILS_ENV=test; creates the test DB if missing (CLI 3.6+; older: spree rspec)
+spree add --gem <gem>         # adds the gem, runs its installer + migrations; a prebuilt project is ejected first (asks; new dev DB)
 spree eject                    # build from server/ instead of the prebuilt image
 spree build [--production]     # rebuild dev image / build the production image (API + dashboard)
 spree add dashboard            # add apps/dashboard (also: spree add seller-dashboard)
@@ -112,7 +119,7 @@ spree update                   # pull latest image, recreate containers (migrati
 spree upgrade [--plan]         # bundle update + migrate + spree:upgrade data steps
 spree seed | sample-data | user create | api-key create|list|revoke
 spree encryption init [--print]  # add ACTIVE_RECORD_ENCRYPTION_* keys to .env (never overwrites); --print for production
-spree rails spree:setup:token  # reprint the first-run admin setup link
+spree exec bin/rails spree:setup:token  # reprint the first-run admin setup link
 spree api <verb> <path>        # call the Admin API from the terminal (see spree-cli)
 ```
 

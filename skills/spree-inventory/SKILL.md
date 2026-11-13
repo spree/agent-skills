@@ -26,7 +26,7 @@ Coming from 5.x (`Spree::StockItem`, stock decremented at order completion, `Spr
 `reserved_count` and `incoming_count` are cached counters. If they drift (manual SQL, crashed jobs), recompute them — the task also sweeps expired reservations and prints every corrected row:
 
 ```bash
-spree rake spree:stock:recount_levels        # classic: bin/rake spree:stock:recount_levels
+spree task stock:recount_levels        # classic: bin/rake spree:stock:recount_levels
 ```
 
 (Service: `Spree.stock_level_recount_service`.)
