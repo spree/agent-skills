@@ -224,8 +224,10 @@ class AddLeadTimeDaysToSpreeProducts < ActiveRecord::Migration[8.1]
 end
 
 # 2. server/config/initializers/spree.rb — writable, filterable/sortable
-Spree::Product.additional_permitted_attributes += [:lead_time_days]   # += (never << — it's frozen; never = — drops other extensions')
-Spree::Product.whitelisted_ransackable_attributes |= %w[lead_time_days]
+Rails.application.config.to_prepare do   # model constants aren't loaded yet when initializers run
+  Spree::Product.additional_permitted_attributes += [:lead_time_days]   # += (never << — it's frozen; never = — drops other extensions')
+  Spree::Product.whitelisted_ransackable_attributes |= %w[lead_time_days]
+end
 Spree.api.admin_product_serializer = 'MyApp::AdminProductSerializer'
 
 # 3. server/app/serializers/my_app/admin_product_serializer.rb — readable
