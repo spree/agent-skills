@@ -35,7 +35,8 @@ Users run Spree in their own infrastructure. Everything is opt-in customization.
 - IDs are strings at the API surface (Stripe-style prefixed IDs); never `.to_i` an ID.
 - `belongs_to` is required by default — declare `optional: true` where blank is legitimate.
 - Uniqueness validations use `scope: spree_base_uniqueness_scope` plus a DB index. Always pass `class_name` and `dependent` on associations.
-- Permit extra attributes on the model: `Spree::Product.additional_permitted_attributes += [:brand_id]` (never `<<`).
+- Permit extra attributes on the model, inside `Rails.application.config.to_prepare` in an initializer: `Spree::Product.additional_permitted_attributes += [:brand_id]` (never `<<`).
+- A `NoMethodError` or `NameError` on a Spree API that 6.0 removed names its replacement and links the upgrade guide; the full list is the removed APIs page in `node_modules/@spree/docs/dist/developer/upgrades/`.
 - Merchant-managed data belongs in **custom fields**; schemaless private data in `metadata`.
 
 ### API v3 (REST)
