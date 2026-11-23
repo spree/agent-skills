@@ -123,7 +123,7 @@ Totals on the purchase: `item_total`, `discount_total`, `delivery_total`, `fee_t
 
 - **PaymentMethod** (`pm_`) — store-scoped gateway config (STI subclasses, preferences for credentials).
 - **PaymentSession** (`ps_`) — provider-side session (Stripe PaymentIntent, Adyen session…) for session-based methods; `status` `pending` / `processing` / `completed` / `failed` / `canceled` / `expired`. `PaymentSetupSession` (`pss_`) saves a method for later.
-- **Payment** (`py_`) — `status` `checkout` / `processing` / `pending` (authorized) / `completed` (captured) / `failed` / `void` / `invalid`; polymorphic `source` (`CreditCard` `card_`, `PaymentSource` `psrc_`, `StoreCredit`, …). Number derived from the order (`R1001-P1`).
+- **Payment** (`py_`) — `status` `checkout` / `processing` / `pending` (authorized) / `requested` (capture or void awaiting the provider's webhook) / `completed` (captured) / `failed` / `void` / `invalid`; polymorphic `source` (`CreditCard` `card_`, `PaymentSource` `psrc_`, `StoreCredit`, …). Number derived from the order (`R1001-P1`).
 - **Refund** (`re_`) — against a payment, with a `RefundReason`. **StoreCredit** (`credit_`) — customer balance, used as a payment source. **GiftCard** (`gc_`) — `active` / `partially_redeemed` / `redeemed` / `canceled`; redeeming issues store credit. See `spree-payments`.
 
 ## 8. Marketplace (brief)

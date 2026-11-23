@@ -17,10 +17,10 @@ Every event below reaches both subscribers and webhook endpoints. Payloads are t
 
 | Resource | Events |
 |---|---|
-| Payment (`py_`) | lifecycle, `payment.completed`, `payment.captured`, `payment.paid`, `payment.voided`, `payment.refunded` |
+| Payment (`py_`) | lifecycle, `payment.completed`, `payment.captured`, `payment.paid`, `payment.voided`, `payment.refunded`, `payment.capture_requested`, `payment.capture_failed`, `payment.void_requested`, `payment.void_failed` (the last four for providers that confirm by webhook, such as Adyen) |
 | Payment session | lifecycle, `payment_session.processing`, `.completed`, `.failed`, `.canceled`, `.expired` |
 | Payment setup session | lifecycle, `payment_setup_session.processing`, `.completed`, `.failed`, `.canceled`, `.expired` |
-| Refund | lifecycle |
+| Refund | lifecycle, `refund.requested`, `refund.failed` |
 | Gift card | lifecycle, `gift_card.redeemed`, `gift_card.partially_redeemed`, `gift_card.canceled` |
 | Gift card batch, store credit | lifecycle |
 
@@ -85,6 +85,7 @@ Every event below reaches both subscribers and webhook endpoints. Payloads are t
 ## Special
 
 - `webhook.test` — synthetic, only sent by "Send test" / `endpoint.send_test!`.
+- `store.updated` — each time the store's settings are saved, a translation or the logo included (from 6.0.6). `data` is the Store API store, the shape `store.get()` returns, so a storefront expires its cached store data on it. The store publishes no other event.
 
 ## Deprecated aliases (dual-published until 6.1; only `order.completed` carries `metadata.deprecated_alias_of`)
 

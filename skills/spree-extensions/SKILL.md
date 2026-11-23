@@ -44,13 +44,15 @@ The `spree-starter` server Gemfile (what `create-spree-app` clones into `server/
 | `spree_dashboard` | Serves the React admin at `/dashboard` |
 | `spree_emails` | Transactional emails |
 | `spree_stripe` | Stripe payments + Stripe Connect payout provider |
+| `spree_paypal_checkout` | PayPal payments |
+| `spree_adyen` | Adyen payments (cards, wallets, local methods via Drop-in) |
 | `spree_easypost` | EasyPost carrier rates, labels, tracking (delivery rate + fulfillment provider) |
 | `spree_meilisearch` | Meilisearch search provider (`SpreeMeilisearch::SearchProvider`) |
 | `spree_opentelemetry` | OpenTelemetry tracing (dormant until `OTEL_*` env is set) |
 | `spree_mcp` | The Admin MCP server at `/api/v3/admin/mcp` (`spree add mcp` on older projects). See `spree-mcp` |
 | `spree_i18n` | UI translations |
 
-`spree_adyen` and `spree_paypal_checkout` are present but commented out. `spree_paypal_checkout` ships with Spree at the same version from 6.0.3: `spree add paypal` installs it, and a project on 6.0.0–6.0.2 upgrades to 6.0.3 first. For `spree_adyen`, check its gemspec/CHANGELOG for a Spree 6 compatible release before enabling. The same goes for any community gem from the Spree 4/5 era (`spree_reviews`, `spree_avatax_official`, …): check the `spree_core` constraint first; most need porting (no `spree_admin`, no `Spree::Adjustment`, no state machines). Integrations catalog: `https://spreecommerce.org/docs/integrations`.
+`spree_paypal_checkout` ships with Spree at the same version from 6.0.3 and `spree_adyen` from 6.0.6; projects scaffolded from older templates add them with `spree add paypal` / `spree add adyen`, which pin the gem to the project's Spree version (upgrade Spree first on an older patch). The 0.x releases of both gems do not run on Spree 6. For any community gem from the Spree 4/5 era any community gem from the Spree 4/5 era (`spree_reviews`, `spree_avatax_official`, …), check the `spree_core` constraint first; most need porting (no `spree_admin`, no `Spree::Adjustment`, no state machines). Integrations catalog: `https://spreecommerce.org/docs/integrations`.
 
 Multi-store *sharing* (one product/promotion/payment method across several stores) is not core — core records belong to one store. Use the `spree_multi_store` extension for that.
 

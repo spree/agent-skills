@@ -26,10 +26,13 @@ A payment is linked to its session by `payment.response_code == payment_session.
 | `checkout` | Created, not yet processed (default) |
 | `processing` | Claimed for a gateway call (atomic claim; blocks double submission) |
 | `pending` | Authorized, not captured |
+| `requested` | The provider accepted a capture or void and confirms it later by webhook (Adyen); capture, void and order cancel refuse it until the outcome arrives. `payment.requested_action` says which was asked |
 | `completed` | Captured — only these count toward what's paid |
 | `failed` | Gateway rejected it (retryable on the same row) |
 | `void` | Voided |
-| `invalid` | Superseded by a newer checkout payment (`has_invalid_status?` — `invalid?` is ActiveModel's) |
+| `invalid` | Superseded by a newer checkout payment on the same cart (`has_invalid_status?` — `invalid?` is ActiveModel's). Payments on a placed or draft order never supersede each other, and one created with no amount defaults to what is left to pay |
+
+Capture events and refunds carry their own `status`: `requested`, `completed` or `failed` (`failure_reason` on a refund). Money sums count only `completed` captures and refunds; balance checks hold back every refund that has not failed. A gateway that confirms later answers `requested?` from capture, void or credit, then reports the outcome by webhook (`capture_succeeded`, `capture_failed`, `void_succeeded`, `void_failed`, `refund_succeeded`, `refund_failed`) through `Spree::Payments::HandleModificationWebhook`. A 6.0 store upgrading to 6.0.6 runs `spree upgrade --step backfill_settlement_statuses` once.
 
 The order's `payment_status` (`none`, `authorized`, `partially_paid`, `paid`, `partially_refunded`, `refunded`, `overcharged`, `voided`) is derived by `Spree::Orders::UpdateStatuses` from payments and refunds (re-run on payment/refund/fulfillment events and by every placed-order money edit: fees, manual discounts, items) — never assign it. "Refunded" counts both ledgers: `Spree::Refund` rows **and** store credit issued as a refund (`order.store_credit_refunds`, `StoreCredit#refunded_order_id`), so an order refunded to store credit reads `partially_refunded` / `refunded`, not `paid`. `Spree::Order.refunded` / `.partially_refunded` scopes filter on this status.
 
@@ -220,7 +223,7 @@ Both pay via `Spree::PaymentMethod::StoreCredit` and reduce the amount due, not 
 
 ## Events
 
-`payment.completed`, `payment.paid`, `payment.captured`, `payment.voided`, `payment.refunded`, `order.paid` (order fully settled — also per child order on split marketplace checkouts), `payment_session.{processing,completed,failed,canceled,expired}`, `payment_setup_session.*`, `gift_card.*`. There is no gateway log table — for transaction forensics use `payment.gateway_dashboard_payment_url` or the `PaymentSession`'s `external_data`. See `spree-events-webhooks`.
+`payment.completed`, `payment.paid`, `payment.captured`, `payment.voided`, `payment.refunded`, `payment.capture_requested`, `payment.capture_failed`, `payment.void_requested`, `payment.void_failed`, `refund.requested`, `refund.failed`, `order.paid` (order fully settled — also per child order on split marketplace checkouts), `payment_session.{processing,completed,failed,canceled,expired}`, `payment_setup_session.*`, `gift_card.*`. There is no gateway log table — for transaction forensics use `payment.gateway_dashboard_payment_url` or the `PaymentSession`'s `external_data`. See `spree-events-webhooks`.
 
 ## Troubleshooting
 
